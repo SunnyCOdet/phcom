@@ -9,6 +9,7 @@ const clipboard = require('./clipboard');
 const appLauncher = require('./app-launcher');
 const fileUpload = require('./file-upload');
 const mediaKeys = require('./media-keys');
+const notifications = require('./notifications');
 
 // Server state
 let server = null;
@@ -118,6 +119,12 @@ function createApp() {
 function broadcastFrame(buffer) {
   for (const client of clients) {
     if (client.readyState === 1) { // WebSocket.OPEN
+      // BACKPRESSURE FIX: Drop frame if the network is too slow to prevent crashing
+      // If there's more than 512KB buffered, the Wi-Fi is struggling. Drop this frame.
+      if (client.bufferedAmount > 512 * 1024) {
+        continue;
+      }
+
       try {
         client.send(buffer, { binary: true }, (err) => {
           if (err) {
@@ -374,6 +381,16 @@ function startServer(port = 7898) {
       // Start screen capture with broadcast function
       screenCapture.start(broadcastFrame);
 
+      // Start notifications listener
+      notifications.start((notif) => {
+        // Broadcast notification event to all connected clients
+        for (const client of clients) {
+          if (client.readyState === 1) {
+            sendJSON(client, notif);
+          }
+        }
+      });
+
       // Listen on port
       server.listen(port, '0.0.0.0', () => {
         console.log(`[server] HTTP server listening on 0.0.0.0:${port}`);
@@ -407,6 +424,7 @@ function stopServer() {
     // Stop screen capture
     try {
       screenCapture.stop();
+      notifications.stop();
     } catch (err) {
       console.error('[server] Error stopping screen capture:', err.message);
     }

@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, clipboard, Tray, Menu, nativeImage, dialog, desktopCapturer, screen } = require('electron');
 const path = require('path');
 const { startServer, stopServer, getStatus } = require('./src/server/index');
-const { getLocalIP, generateQRCode, startMDNS, stopMDNS, startNgrokTunnel, getNgrokUrl } = require('./src/server/network');
+const { getLocalIP, generateQRCode, startMDNS, stopMDNS, startTunnel, getTunnelUrl } = require('./src/server/network');
 
 const PORT = 7898;
 let mainWindow = null;
@@ -179,7 +179,8 @@ function setupIPC() {
   });
 
   ipcMain.handle('get-connection-info', async () => {
-    const primaryURL = tunnelURL || connectionURL;
+    // Prioritize the fast local Wi-Fi link over the tunnel for the QR code
+    const primaryURL = connectionURL || tunnelURL;
     const qrCode = await generateQRCode(primaryURL);
     return {
       ip: localIP,
@@ -210,7 +211,7 @@ function setupIPC() {
   });
 
   ipcMain.handle('minimize-window', () => {
-    if (mainWindow) mainWindow.minimize();
+    if (mainWindow) mainWindow.hide();
   });
 }
 
@@ -234,14 +235,13 @@ async function startup() {
     startMDNS(PORT);
     console.log(`[Magical Newton] mDNS advertised as my-pc.local:${PORT}`);
 
-    // Start ngrok tunnel
-    console.log('[Magical Newton] Starting ngrok tunnel...');
-    tunnelURL = await startNgrokTunnel(PORT);
+    // Start localtunnel
+    console.log('[Magical Newton] Starting tunnel...');
+    tunnelURL = await startTunnel(PORT);
     if (tunnelURL) {
       console.log(`[Magical Newton] 🌐 Tunnel URL: ${tunnelURL}`);
     } else {
-      console.log('[Magical Newton] ⚠️  Ngrok tunnel failed - using local network only');
-      console.log('[Magical Newton] Set NGROK_AUTHTOKEN environment variable to enable tunneling');
+      console.log('[Magical Newton] ⚠️  Tunnel failed - using local network only');
     }
 
     // Create window and tray

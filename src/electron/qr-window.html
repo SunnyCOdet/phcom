@@ -476,8 +476,8 @@
           } catch(e) { }
         }
 
-        // Convert canvas to JPEG blob asynchronously
-        const blob = await new Promise(resolve => canvasElement.toBlob(resolve, 'image/jpeg', 0.6));
+        // Convert canvas to JPEG blob asynchronously (WebP is too slow for 60FPS)
+        const blob = await new Promise(resolve => canvasElement.toBlob(resolve, 'image/jpeg', 0.7));
         
         if (blob && isCapturing) {
           const arrayBuffer = await blob.arrayBuffer();

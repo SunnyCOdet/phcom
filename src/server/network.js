@@ -32,7 +32,7 @@ function loadEnv() {
   }
 }
 let publishedService = null;
-let ngrokUrl = null;
+let tunnelUrl = null;
 
 /**
  * Get the first non-internal IPv4 address from network interfaces.
@@ -41,13 +41,27 @@ let ngrokUrl = null;
 function getLocalIP() {
   try {
     const interfaces = os.networkInterfaces();
+    let bestIp = '127.0.0.1';
+    
     for (const name of Object.keys(interfaces)) {
+      // Ignore virtual network interfaces
+      if (name.toLowerCase().includes('vethernet') || 
+          name.toLowerCase().includes('wsl') || 
+          name.toLowerCase().includes('virtual')) {
+        continue;
+      }
+      
       for (const iface of interfaces[name]) {
         if (iface.family === 'IPv4' && !iface.internal) {
-          return iface.address;
+          bestIp = iface.address;
+          // Prefer Wi-Fi if we find it
+          if (name.toLowerCase().includes('wi-fi') || name.toLowerCase().includes('wireless')) {
+            return bestIp;
+          }
         }
       }
     }
+    return bestIp;
   } catch (err) {
     console.error('[network] Failed to get local IP:', err.message);
   }
@@ -120,37 +134,36 @@ function stopMDNS() {
 }
 
 /**
- * Start an ngrok tunnel to expose the local server.
+ * Start a localtunnel to expose the local server.
  * @param {number} port - Port to tunnel
- * @returns {Promise<string|null>} Public ngrok URL or null if failed
+ * @returns {Promise<string|null>} Public localtunnel URL or null if failed
  */
-async function startNgrokTunnel(port) {
+async function startTunnel(port) {
   try {
-    loadEnv();
-    const ngrok = require('@ngrok/ngrok');
-    console.log('[network] Starting ngrok tunnel...');
+    const localtunnel = require('localtunnel');
+    console.log('[network] Starting localtunnel...');
 
-    const listener = await ngrok.forward({
-      addr: port,
-      authtoken_from_env: true,
+    const tunnel = await localtunnel({ port: port });
+    tunnelUrl = tunnel.url;
+    console.log(`[network] localtunnel established: ${tunnelUrl}`);
+    
+    tunnel.on('error', err => {
+      console.error('[network] localtunnel error:', err.message);
     });
 
-    ngrokUrl = listener.url();
-    console.log(`[network] ngrok tunnel established: ${ngrokUrl}`);
-    return ngrokUrl;
+    return tunnelUrl;
   } catch (err) {
-    console.error('[network] ngrok tunnel failed:', err.message);
-    console.log('[network] Tip: Set NGROK_AUTHTOKEN env variable or run "ngrok config add-authtoken <token>"');
+    console.error('[network] localtunnel failed:', err.message);
     return null;
   }
 }
 
 /**
- * Get the current ngrok URL if available.
+ * Get the current tunnel URL if available.
  * @returns {string|null}
  */
-function getNgrokUrl() {
-  return ngrokUrl;
+function getTunnelUrl() {
+  return tunnelUrl;
 }
 
 module.exports = {
@@ -158,6 +171,6 @@ module.exports = {
   generateQRCode,
   startMDNS,
   stopMDNS,
-  startNgrokTunnel,
-  getNgrokUrl,
+  startTunnel,
+  getTunnelUrl,
 };

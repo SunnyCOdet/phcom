@@ -229,6 +229,42 @@
           dom.latencyValue.textContent = latency;
         }
         break;
+      case 'system-notification':
+        showToast(`🔔 ${msg.title}${msg.body ? ' - ' + msg.body : ''}`, 'info');
+        
+        // Attempt vibration
+        if (navigator.vibrate) {
+          navigator.vibrate([200, 100, 200]);
+        }
+        
+        // Visual flash
+        document.body.classList.add('flash-notification');
+        setTimeout(() => document.body.classList.remove('flash-notification'), 500);
+
+        // Audio Beep
+        try {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          if (AudioContext) {
+            const audioCtx = new AudioContext();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+            
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.5);
+          }
+        } catch (e) {
+          console.error('Audio beep failed', e);
+        }
+        break;
       default:
         break;
     }
