@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Remote Desktop">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#08080c">
+  <meta name="format-detection" content="telephone=no">
+  <title>Remote Desktop</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+
+  <!-- Status Bar -->
+  <div id="status-bar">
+    <div class="status-left">
+      <div id="connection-dot"></div>
+      <span id="connection-text">Disconnected</span>
+    </div>
+    <div class="status-right">
+      <div class="status-badge" id="fps-badge">
+        <span class="badge-label">FPS</span>
+        <span class="badge-value" id="fps-value">0</span>
+      </div>
+      <div class="status-badge" id="latency-badge">
+        <span class="badge-label">MS</span>
+        <span class="badge-value" id="latency-value">--</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screen Container -->
+  <div id="screen-container">
+    <canvas id="screen-canvas"></canvas>
+    <div id="no-signal">
+      <div class="no-signal-icon">🖥️</div>
+      <div class="no-signal-text">Waiting for connection…</div>
+    </div>
+  </div>
+
+  <!-- Hidden Keyboard Input -->
+  <input type="text" id="keyboard-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Keyboard input">
+
+  <!-- Special Keys Bar -->
+  <div id="special-keys-bar">
+    <div class="keys-scroll">
+      <button class="key-btn modifier-key" data-key="ctrl">Ctrl</button>
+      <button class="key-btn modifier-key" data-key="alt">Alt</button>
+      <button class="key-btn modifier-key" data-key="shift">Shift</button>
+      <button class="key-btn modifier-key" data-key="win">Win</button>
+      <div class="key-separator"></div>
+      <button class="key-btn action-key" data-key="Escape">Esc</button>
+      <button class="key-btn action-key" data-key="Tab">Tab</button>
+      <button class="key-btn action-key" data-key="Enter">Enter</button>
+      <button class="key-btn action-key" data-key="Backspace">⌫</button>
+      <button class="key-btn action-key" data-key="Delete">Del</button>
+      <div class="key-separator"></div>
+      <button class="key-btn action-key" data-key="ArrowUp">↑</button>
+      <button class="key-btn action-key" data-key="ArrowDown">↓</button>
+      <button class="key-btn action-key" data-key="ArrowLeft">←</button>
+      <button class="key-btn action-key" data-key="ArrowRight">→</button>
+      <div class="key-separator"></div>
+      <button class="key-btn action-key" data-key="Home">Home</button>
+      <button class="key-btn action-key" data-key="End">End</button>
+      <button class="key-btn action-key" data-key="PageUp">PgUp</button>
+      <button class="key-btn action-key" data-key="PageDown">PgDn</button>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <button class="toolbar-btn" data-action="keyboard" id="btn-keyboard">
+      <span class="toolbar-icon">⌨️</span>
+      <span class="toolbar-label">Keys</span>
+    </button>
+    <button class="toolbar-btn" data-action="mouse" id="btn-mouse">
+      <span class="toolbar-icon">🖱️</span>
+      <span class="toolbar-label">Mouse</span>
+    </button>
+    <button class="toolbar-btn" data-action="apps" id="btn-apps">
+      <span class="toolbar-icon">📱</span>
+      <span class="toolbar-label">Apps</span>
+    </button>
+    <button class="toolbar-btn" data-action="clipboard" id="btn-clipboard">
+      <span class="toolbar-icon">📋</span>
+      <span class="toolbar-label">Clip</span>
+    </button>
+    <button class="toolbar-btn" data-action="files" id="btn-files">
+      <span class="toolbar-icon">📁</span>
+      <span class="toolbar-label">Files</span>
+    </button>
+    <button class="toolbar-btn" data-action="media" id="btn-media">
+      <span class="toolbar-icon">🎵</span>
+      <span class="toolbar-label">Media</span>
+    </button>
+    <button class="toolbar-btn" data-action="settings" id="btn-settings">
+      <span class="toolbar-icon">⚙️</span>
+      <span class="toolbar-label">Settings</span>
+    </button>
+  </div>
+
+  <!-- Panel Overlay -->
+  <div class="panel-overlay" id="panel-overlay"></div>
+
+  <!-- Apps Panel -->
+  <div class="panel" id="apps-panel">
+    <div class="panel-header">
+      <div class="panel-grabber"></div>
+      <h3 class="panel-title">Applications</h3>
+    </div>
+    <div class="panel-body">
+      <div id="apps-grid" class="apps-grid">
+        <div class="apps-loading">Loading apps…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Clipboard Panel -->
+  <div class="panel" id="clipboard-panel">
+    <div class="panel-header">
+      <div class="panel-grabber"></div>
+      <h3 class="panel-title">Clipboard</h3>
+    </div>
+    <div class="panel-body">
+      <textarea id="clipboard-text" placeholder="Clipboard content will appear here…"></textarea>
+      <div class="panel-actions">
+        <button class="action-btn" id="clipboard-fetch">
+          <span>📥</span> Copy from PC
+        </button>
+        <button class="action-btn accent" id="clipboard-send">
+          <span>📤</span> Send to PC
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Files Panel -->
+  <div class="panel" id="files-panel">
+    <div class="panel-header">
+      <div class="panel-grabber"></div>
+      <h3 class="panel-title">File Transfer</h3>
+    </div>
+    <div class="panel-body">
+      <div class="file-upload-area">
+        <input type="file" id="file-input" multiple hidden>
+        <label for="file-input" class="file-upload-label">
+          <span class="file-upload-icon">📂</span>
+          <span class="file-upload-text">Tap to select files</span>
+        </label>
+      </div>
+      <div id="file-selected" class="file-selected" hidden>
+        <span id="file-name" class="file-name"></span>
+        <button class="action-btn accent" id="file-upload-btn">Upload</button>
+      </div>
+      <div class="progress-container" id="upload-progress-container" hidden>
+        <div class="progress-bar">
+          <div class="progress-fill" id="upload-progress-fill"></div>
+        </div>
+        <span class="progress-text" id="upload-progress-text">0%</span>
+      </div>
+      <div id="upload-status" class="upload-status"></div>
+    </div>
+  </div>
+
+  <!-- Media Panel -->
+  <div class="panel" id="media-panel">
+    <div class="panel-header">
+      <div class="panel-grabber"></div>
+      <h3 class="panel-title">Media Controls</h3>
+    </div>
+    <div class="panel-body">
+      <div class="media-controls">
+        <div class="media-section">
+          <div class="media-section-title">Volume</div>
+          <div class="media-buttons-row">
+            <button class="media-btn" data-media="volumeDown">🔉</button>
+            <button class="media-btn" data-media="mute">🔇</button>
+            <button class="media-btn" data-media="volumeUp">🔊</button>
+          </div>
+        </div>
+        <div class="media-section">
+          <div class="media-section-title">Playback</div>
+          <div class="media-buttons-row">
+            <button class="media-btn" data-media="prevTrack">⏮️</button>
+            <button class="media-btn large" data-media="playPause">⏯️</button>
+            <button class="media-btn" data-media="nextTrack">⏭️</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Panel -->
+  <div class="panel" id="settings-panel">
+    <div class="panel-header">
+      <div class="panel-grabber"></div>
+      <h3 class="panel-title">Settings</h3>
+    </div>
+    <div class="panel-body">
+      <div class="setting-group">
+        <div class="setting-header">
+          <label class="setting-label">Control Mode</label>
+          <span class="setting-value" id="control-mode-value">Direct Touch</span>
+        </div>
+        <div class="mode-toggle-group">
+          <button class="mode-btn active" id="btn-mode-touch" data-mode="touch">Direct Touch</button>
+          <button class="mode-btn" id="btn-mode-trackpad" data-mode="trackpad">Trackpad</button>
+        </div>
+      </div>
+      <div class="setting-group">
+        <div class="setting-header">
+          <label class="setting-label">Stream Quality</label>
+          <span class="setting-value" id="quality-value">50</span>
+        </div>
+        <input type="range" class="setting-slider" id="quality-slider" min="30" max="90" value="50">
+        <div class="setting-range-labels">
+          <span>Low</span><span>High</span>
+        </div>
+      </div>
+      <div class="setting-group">
+        <div class="setting-header">
+          <label class="setting-label">Max FPS</label>
+          <span class="setting-value" id="fps-setting-value">15</span>
+        </div>
+        <input type="range" class="setting-slider" id="fps-slider" min="5" max="30" value="15">
+        <div class="setting-range-labels">
+          <span>5</span><span>30</span>
+        </div>
+      </div>
+      <div class="setting-group">
+        <div class="setting-header">
+          <label class="setting-label">Touch Sensitivity</label>
+          <span class="setting-value" id="sensitivity-value">1.5</span>
+        </div>
+        <input type="range" class="setting-slider" id="sensitivity-slider" min="5" max="30" value="15" step="1">
+        <div class="setting-range-labels">
+          <span>Low</span><span>High</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container"></div>
+
+  <script src="index.js"></script>
+</body>
+</html>

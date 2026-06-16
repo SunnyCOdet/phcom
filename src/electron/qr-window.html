@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Magical Newton</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: transparent;
+      overflow: hidden;
+      -webkit-app-region: drag;
+      user-select: none;
+    }
+
+    .window {
+      width: 400px;
+      height: 600px;
+      background: linear-gradient(145deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
+      border-radius: 24px;
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .window::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 200px;
+      background: radial-gradient(ellipse at 50% -50%, rgba(99,102,241,0.15) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    /* Title Bar */
+    .titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px 8px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .titlebar-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.6);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .titlebar-actions {
+      display: flex;
+      gap: 8px;
+      -webkit-app-region: no-drag;
+    }
+
+    .titlebar-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: rgba(255,255,255,0.4);
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+
+    .titlebar-btn:hover {
+      background: rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.8);
+    }
+
+    .titlebar-btn.close:hover {
+      background: rgba(239,68,68,0.3);
+      border-color: rgba(239,68,68,0.4);
+      color: #ef4444;
+    }
+
+    /* Content */
+    .content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 6px 24px 20px;
+      position: relative;
+      z-index: 1;
+      overflow-y: auto;
+    }
+
+    /* Logo */
+    .logo {
+      font-size: 32px;
+      margin-bottom: 2px;
+    }
+
+    .app-name {
+      font-size: 20px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6, #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 2px;
+    }
+
+    .subtitle {
+      font-size: 11px;
+      color: rgba(255,255,255,0.35);
+      margin-bottom: 14px;
+    }
+
+    /* QR Code */
+    .qr-container {
+      background: white;
+      border-radius: 14px;
+      padding: 12px;
+      margin-bottom: 16px;
+      box-shadow: 0 8px 32px rgba(99,102,241,0.15);
+      position: relative;
+    }
+
+    .qr-container img {
+      width: 170px;
+      height: 170px;
+      display: block;
+    }
+
+    .qr-glow {
+      position: absolute;
+      inset: -2px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      z-index: -1;
+      opacity: 0.5;
+      filter: blur(8px);
+      animation: qrGlow 3s ease-in-out infinite;
+    }
+
+    @keyframes qrGlow {
+      0%, 100% { opacity: 0.3; }
+      50% { opacity: 0.6; }
+    }
+
+    /* Tunnel badge */
+    .tunnel-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .tunnel-badge.active {
+      background: rgba(34,197,94,0.15);
+      color: #22c55e;
+      border: 1px solid rgba(34,197,94,0.25);
+    }
+    .tunnel-badge.inactive {
+      background: rgba(245,158,11,0.15);
+      color: #f59e0b;
+      border: 1px solid rgba(245,158,11,0.25);
+    }
+
+    /* Connection Info */
+    .connection-info {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .info-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 10px;
+      padding: 8px 12px;
+      -webkit-app-region: no-drag;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .info-row:hover {
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(99,102,241,0.3);
+    }
+
+    .info-row.primary {
+      border-color: rgba(99,102,241,0.3);
+      background: rgba(99,102,241,0.08);
+    }
+
+    .info-label {
+      font-size: 10px;
+      color: rgba(255,255,255,0.35);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .info-value {
+      font-size: 12px;
+      font-weight: 500;
+      color: #e2e8f0;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      word-break: break-all;
+    }
+
+    .copy-hint {
+      font-size: 9px;
+      color: rgba(99,102,241,0.6);
+      margin-left: 8px;
+      flex-shrink: 0;
+    }
+
+    /* Status */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .status-text {
+      font-size: 11px;
+      color: rgba(255,255,255,0.5);
+    }
+
+    .status-clients {
+      font-size: 10px;
+      color: rgba(255,255,255,0.3);
+      margin-left: auto;
+    }
+
+    /* Loading state */
+    .loading-text {
+      color: rgba(255,255,255,0.25);
+      font-style: italic;
+    }
+
+    .error-text {
+      color: #ef4444;
+      font-size: 11px;
+      text-align: center;
+      margin-top: 8px;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+      50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(34,197,94,0); }
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: rgba(34,197,94,0.9);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+      z-index: 100;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <div class="window">
+    <div class="titlebar">
+      <span class="titlebar-title">Magical Newton</span>
+      <div class="titlebar-actions">
+        <button class="titlebar-btn minimize" id="btn-minimize" title="Minimize">─</button>
+        <button class="titlebar-btn close" id="btn-close" title="Hide to Tray">✕</button>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="logo">🪄</div>
+      <div class="app-name">Magical Newton</div>
+      <div class="subtitle">Scan with your iPhone to connect</div>
+
+      <div class="qr-container">
+        <div class="qr-glow"></div>
+        <img id="qr-image" src="" alt="QR Code">
+      </div>
+
+      <div class="tunnel-badge inactive" id="tunnel-badge">
+        <span>⏳</span> <span id="tunnel-text">Starting tunnel...</span>
+      </div>
+
+      <div class="connection-info">
+        <div class="info-row primary" id="primary-url-row" title="Click to copy" style="display:none;">
+          <div>
+            <div class="info-label">📡 Connect via (scan QR)</div>
+            <div class="info-value" id="primary-url-value">Loading...</div>
+          </div>
+          <span class="copy-hint">copy</span>
+        </div>
+        <div class="info-row" id="local-url-row" title="Click to copy">
+          <div>
+            <div class="info-label">🏠 Local Network</div>
+            <div class="info-value" id="local-url-value"><span class="loading-text">Loading...</span></div>
+          </div>
+          <span class="copy-hint">copy</span>
+        </div>
+        <div class="info-row" id="mdns-row" title="Click to copy">
+          <div>
+            <div class="info-label">📛 Local DNS</div>
+            <div class="info-value" id="mdns-value"><span class="loading-text">Loading...</span></div>
+          </div>
+          <span class="copy-hint">copy</span>
+        </div>
+      </div>
+
+      <div id="error-msg" class="error-text" style="display:none;"></div>
+
+      <div class="status-bar">
+        <div class="status-dot"></div>
+        <span class="status-text">Server running</span>
+        <span class="status-clients" id="clients-count">0 clients</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2000);
+    }
+
+    function copyToClipboard(text) {
+      if (window.electronAPI) {
+        window.electronAPI.setClipboard(text);
+      }
+      showToast('Copied to clipboard!');
+    }
+
+    // Load connection info with retry
+    async function init() {
+      let retries = 0;
+      const maxRetries = 10;
+
+      while (retries < maxRetries) {
+        try {
+          if (!window.electronAPI) {
+            throw new Error('electronAPI not available');
+          }
+
+          const info = await window.electronAPI.getConnectionInfo();
+
+          // Set QR code
+          const qrImg = document.getElementById('qr-image');
+          if (info.qrCode) {
+            qrImg.src = info.qrCode;
+          }
+
+          // Local URL
+          document.getElementById('local-url-value').textContent = info.url || 'N/A';
+          document.getElementById('local-url-row').onclick = () => copyToClipboard(info.url);
+
+          // mDNS
+          document.getElementById('mdns-value').textContent = info.mdnsUrl || 'N/A';
+          document.getElementById('mdns-row').onclick = () => copyToClipboard(info.mdnsUrl);
+
+          // Tunnel URL
+          const tunnelBadge = document.getElementById('tunnel-badge');
+          const tunnelText = document.getElementById('tunnel-text');
+          const primaryRow = document.getElementById('primary-url-row');
+
+          if (info.tunnelUrl) {
+            tunnelBadge.className = 'tunnel-badge active';
+            tunnelText.textContent = 'Tunnel Active';
+            tunnelBadge.querySelector('span').textContent = '🌐';
+
+            primaryRow.style.display = '';
+            document.getElementById('primary-url-value').textContent = info.tunnelUrl;
+            primaryRow.onclick = () => copyToClipboard(info.tunnelUrl);
+          } else {
+            tunnelBadge.className = 'tunnel-badge inactive';
+            tunnelText.textContent = 'Local Network Only';
+            tunnelBadge.querySelector('span').textContent = '⚠️';
+
+            // Use local URL as primary
+            primaryRow.style.display = '';
+            document.getElementById('primary-url-value').textContent = info.url;
+            primaryRow.onclick = () => copyToClipboard(info.url);
+          }
+
+          document.getElementById('error-msg').style.display = 'none';
+          return; // Success!
+
+        } catch (err) {
+          retries++;
+          console.warn(`[QR Window] Init attempt ${retries}/${maxRetries} failed:`, err.message);
+
+          if (retries >= maxRetries) {
+            document.getElementById('error-msg').textContent = 'Failed to load connection info. Try restarting the app.';
+            document.getElementById('error-msg').style.display = 'block';
+          }
+
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    }
+
+    // Update client count periodically
+    async function updateStatus() {
+      try {
+        if (!window.electronAPI) return;
+        const status = await window.electronAPI.getStatus();
+        document.getElementById('clients-count').textContent =
+          `${status.clients} client${status.clients !== 1 ? 's' : ''} · ${status.fps} FPS`;
+      } catch (err) {}
+    }
+
+    // Window controls
+    document.getElementById('btn-minimize').addEventListener('click', () => {
+      if (window.electronAPI) window.electronAPI.minimizeWindow();
+    });
+
+    document.getElementById('btn-close').addEventListener('click', () => {
+      if (window.electronAPI) window.electronAPI.closeWindow();
+    });
+
+    // Start after a small delay to ensure preload is ready
+    setTimeout(init, 500);
+    setInterval(updateStatus, 3000);
+  </script>
+</body>
+</html>
