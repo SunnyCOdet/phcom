@@ -105,6 +105,15 @@
   let maxFps = parseInt(localStorage.getItem('rd_maxFps') || '15', 10);
   let controlMode = localStorage.getItem('rd_controlMode') || 'touch'; // 'touch' (Direct Touch) or 'trackpad'
 
+  const ZOOM_MIN = 1;
+  const ZOOM_MAX = 4;
+  const PINCH_ZOOM_THRESHOLD = 8;
+  const screenZoom = {
+    scale: 1,
+    translateX: 0,
+    translateY: 0,
+  };
+
   // Panels
   let activePanel = null;
   const panelMap = {
@@ -243,23 +252,21 @@
 
         // Audio Beep
         try {
-          const AudioContext = window.AudioContext || window.webkitAudioContext;
-          if (AudioContext) {
-            const audioCtx = new AudioContext();
-            const oscillator = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
+          if (globalAudioCtx && globalAudioCtx.state === 'running') {
+            const oscillator = globalAudioCtx.createOscillator();
+            const gainNode = globalAudioCtx.createGain();
             
             oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+            oscillator.frequency.setValueAtTime(880, globalAudioCtx.currentTime); // A5
             
-            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+            gainNode.gain.setValueAtTime(0.1, globalAudioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, globalAudioCtx.currentTime + 0.5);
             
             oscillator.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
+            gainNode.connect(globalAudioCtx.destination);
             
             oscillator.start();
-            oscillator.stop(audioCtx.currentTime + 0.5);
+            oscillator.stop(globalAudioCtx.currentTime + 0.5);
           }
         } catch (e) {
           console.error('Audio beep failed', e);
@@ -322,6 +329,60 @@
   function resizeCanvas() {
     // Canvas CSS sizing handles display; internal resolution set by frame
     // Nothing needed here since we set canvas.width/height from bitmap dims
+    clampScreenZoom();
+    applyScreenZoom();
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(value, max));
+  }
+
+  function clampScreenZoom() {
+    screenZoom.scale = clamp(screenZoom.scale, ZOOM_MIN, ZOOM_MAX);
+
+    if (screenZoom.scale <= ZOOM_MIN + 0.001) {
+      screenZoom.scale = ZOOM_MIN;
+      screenZoom.translateX = 0;
+      screenZoom.translateY = 0;
+      return;
+    }
+
+    const containerWidth = dom.screenContainer.clientWidth;
+    const containerHeight = dom.screenContainer.clientHeight;
+    const scaledWidth = dom.canvas.offsetWidth * screenZoom.scale;
+    const scaledHeight = dom.canvas.offsetHeight * screenZoom.scale;
+    const maxX = Math.max(0, (scaledWidth - containerWidth) / 2);
+    const maxY = Math.max(0, (scaledHeight - containerHeight) / 2);
+
+    screenZoom.translateX = clamp(screenZoom.translateX, -maxX, maxX);
+    screenZoom.translateY = clamp(screenZoom.translateY, -maxY, maxY);
+  }
+
+  function applyScreenZoom() {
+    dom.canvas.style.transformOrigin = 'center center';
+    dom.canvas.style.transform = `translate(${screenZoom.translateX}px, ${screenZoom.translateY}px) scale(${screenZoom.scale})`;
+  }
+
+  function getTouchDistance(t0, t1) {
+    return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+  }
+
+  function getTouchMidpoint(t0, t1) {
+    return {
+      x: (t0.clientX + t1.clientX) / 2,
+      y: (t0.clientY + t1.clientY) / 2,
+    };
+  }
+
+  function getCanvasPointPct(clientX, clientY) {
+    const rect = dom.canvas.getBoundingClientRect();
+    const canvasX = clientX - rect.left;
+    const canvasY = clientY - rect.top;
+
+    return {
+      x: clamp(canvasX / rect.width, 0, 1),
+      y: clamp(canvasY / rect.height, 0, 1),
+    };
   }
 
   // ─── Touch Input ───────────────────────────────────────
@@ -488,6 +549,7 @@
     const canvas = dom.canvas;
 
     let twoFingerTapData = null;
+    let pinchGesture = null;
 
     canvas.addEventListener('touchstart', (e) => {
       e.preventDefault();
@@ -516,6 +578,16 @@
           startTime: performance.now(),
           ids: [e.touches[0].identifier, e.touches[1].identifier],
         };
+        const midpoint = getTouchMidpoint(e.touches[0], e.touches[1]);
+        pinchGesture = {
+          startDistance: getTouchDistance(e.touches[0], e.touches[1]),
+          startScale: screenZoom.scale,
+          startTranslateX: screenZoom.translateX,
+          startTranslateY: screenZoom.translateY,
+          startMidX: midpoint.x,
+          startMidY: midpoint.y,
+          isLocalZoom: false,
+        };
       }
 
       // Check for Double-Tap-and-Drag start (single finger only)
@@ -537,12 +609,8 @@
           
           // Move mouse to this position first if in Direct Touch mode
           if (controlMode === 'touch') {
-            const rect = canvas.getBoundingClientRect();
-            const canvasX = touch.clientX - rect.left;
-            const canvasY = touch.clientY - rect.top;
-            const pctX = Math.max(0, Math.min(canvasX / rect.width, 1.0));
-            const pctY = Math.max(0, Math.min(canvasY / rect.height, 1.0));
-            send({ type: 'mousemove_abs', x: pctX, y: pctY });
+            const point = getCanvasPointPct(touch.clientX, touch.clientY);
+            send({ type: 'mousemove_abs', x: point.x, y: point.y });
           }
           
           send({ type: 'mousedown' });
@@ -556,12 +624,8 @@
             if (t && t.totalMovement < 15) {
               dragMode = true;
               if (controlMode === 'touch') {
-                const rect = canvas.getBoundingClientRect();
-                const canvasX = t.startX - rect.left;
-                const canvasY = t.startY - rect.top;
-                const pctX = Math.max(0, Math.min(canvasX / rect.width, 1.0));
-                const pctY = Math.max(0, Math.min(canvasY / rect.height, 1.0));
-                send({ type: 'mousemove_abs', x: pctX, y: pctY });
+                const point = getCanvasPointPct(t.startX, t.startY);
+                send({ type: 'mousemove_abs', x: point.x, y: point.y });
               }
               send({ type: 'mousedown' });
               if (navigator.vibrate) navigator.vibrate(30);
@@ -601,12 +665,8 @@
         if (now - lastMouseMoveSend >= MOUSE_MOVE_INTERVAL) {
           if (controlMode === 'touch') {
             // Absolute positioning
-            const rect = canvas.getBoundingClientRect();
-            const canvasX = touch.clientX - rect.left;
-            const canvasY = touch.clientY - rect.top;
-            const pctX = Math.max(0, Math.min(canvasX / rect.width, 1.0));
-            const pctY = Math.max(0, Math.min(canvasY / rect.height, 1.0));
-            send({ type: 'mousemove_abs', x: pctX, y: pctY });
+            const point = getCanvasPointPct(touch.clientX, touch.clientY);
+            send({ type: 'mousemove_abs', x: point.x, y: point.y });
           } else {
             // Trackpad relative positioning
             tracked.pendingDx = (tracked.pendingDx || 0) + (rawDx * sensitivity);
@@ -626,8 +686,24 @@
         const tr1 = activeTouches.get(t1.identifier);
         if (!tr0 || !tr1) return;
 
+        if (!pinchGesture) {
+          const midpoint = getTouchMidpoint(t0, t1);
+          pinchGesture = {
+            startDistance: getTouchDistance(t0, t1),
+            startScale: screenZoom.scale,
+            startTranslateX: screenZoom.translateX,
+            startTranslateY: screenZoom.translateY,
+            startMidX: midpoint.x,
+            startMidY: midpoint.y,
+            isLocalZoom: false,
+          };
+        }
+
         const avgDx = ((t0.clientX - tr0.lastX) + (t1.clientX - tr1.lastX)) / 2;
         const avgDy = ((t0.clientY - tr0.lastY) + (t1.clientY - tr1.lastY)) / 2;
+        const distance = getTouchDistance(t0, t1);
+        const distanceDelta = Math.abs(distance - pinchGesture.startDistance);
+        const shouldZoomLocally = pinchGesture.isLocalZoom || distanceDelta > PINCH_ZOOM_THRESHOLD || screenZoom.scale > ZOOM_MIN;
 
         tr0.totalMovement += Math.abs(t0.clientX - tr0.lastX) + Math.abs(t0.clientY - tr0.lastY);
         tr1.totalMovement += Math.abs(t1.clientX - tr1.lastX) + Math.abs(t1.clientY - tr1.lastY);
@@ -636,6 +712,19 @@
         tr0.lastY = t0.clientY;
         tr1.lastX = t1.clientX;
         tr1.lastY = t1.clientY;
+
+        if (shouldZoomLocally) {
+          const midpoint = getTouchMidpoint(t0, t1);
+          const nextScale = pinchGesture.startScale * (distance / pinchGesture.startDistance);
+
+          pinchGesture.isLocalZoom = true;
+          screenZoom.scale = clamp(nextScale, ZOOM_MIN, ZOOM_MAX);
+          screenZoom.translateX = pinchGesture.startTranslateX + (midpoint.x - pinchGesture.startMidX);
+          screenZoom.translateY = pinchGesture.startTranslateY + (midpoint.y - pinchGesture.startMidY);
+          clampScreenZoom();
+          applyScreenZoom();
+          return;
+        }
 
         if (Math.abs(avgDx) > 0.5 || Math.abs(avgDy) > 0.5) {
           send({ type: 'scroll', deltaX: avgDx, deltaY: avgDy });
@@ -678,8 +767,10 @@
       if (twoFingerTapData && e.touches.length === 0 && ended.length >= 1) {
         const duration = performance.now() - twoFingerTapData.startTime;
         const allSmallMovement = ended.every(t => t.totalMovement < 15);
-        if (duration < 400 && allSmallMovement) {
+        const wasLocalZoom = pinchGesture?.isLocalZoom;
+        if (duration < 400 && allSmallMovement && !wasLocalZoom) {
           twoFingerTapData = null;
+          pinchGesture = null;
           send({ type: 'rightclick' });
           return;
         }
@@ -694,12 +785,8 @@
           
           // Perform click immediately to feel snappy
           if (controlMode === 'touch') {
-            const rect = canvas.getBoundingClientRect();
-            const canvasX = t.lastX - rect.left;
-            const canvasY = t.lastY - rect.top;
-            const pctX = Math.max(0, Math.min(canvasX / rect.width, 1.0));
-            const pctY = Math.max(0, Math.min(canvasY / rect.height, 1.0));
-            send({ type: 'mousemove_abs', x: pctX, y: pctY });
+            const point = getCanvasPointPct(t.lastX, t.lastY);
+            send({ type: 'mousemove_abs', x: point.x, y: point.y });
           }
           
           sendWithModifiers({ type: 'click' });
@@ -712,6 +799,9 @@
       
       if (e.touches.length === 0) {
         wasMultiTouch = false;
+        pinchGesture = null;
+      } else if (e.touches.length < 2) {
+        pinchGesture = null;
       }
     }, { passive: false });
 
@@ -724,6 +814,9 @@
       if (dragMode) {
         dragMode = false;
         send({ type: 'mouseup' });
+      }
+      if (e.touches.length < 2) {
+        pinchGesture = null;
       }
       wasMultiTouch = false;
     }, { passive: false });
@@ -1174,6 +1267,33 @@
     }
     lastTouchEndTime = now;
   }, { passive: false });
+
+  let reconnectTimeout;
+
+  // ─── Audio Context Unlocking ──────────────────────────
+  let globalAudioCtx = null;
+
+  function initAudio() {
+    if (!globalAudioCtx) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (AudioContext) {
+        globalAudioCtx = new AudioContext();
+        // Play a silent sound to unlock the context
+        const osc = globalAudioCtx.createOscillator();
+        const gain = globalAudioCtx.createGain();
+        gain.gain.value = 0;
+        osc.connect(gain);
+        gain.connect(globalAudioCtx.destination);
+        osc.start();
+        osc.stop(globalAudioCtx.currentTime + 0.01);
+      }
+    } else if (globalAudioCtx.state === 'suspended') {
+      globalAudioCtx.resume();
+    }
+  }
+
+  document.addEventListener('touchstart', initAudio, { once: true });
+  document.addEventListener('mousedown', initAudio, { once: true });
 
   // ─── Initialization ────────────────────────────────────
 

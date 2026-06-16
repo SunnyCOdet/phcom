@@ -156,6 +156,7 @@ body {
   max-height: 100%;
   touch-action: none;
   image-rendering: auto;
+  will-change: transform;
 }
 
 #no-signal {
