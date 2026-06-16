@@ -440,14 +440,130 @@
       }
     }
 
-    // Update client count periodically
-    async function updateStatus() {
+    let streamInstance = null;
+    let videoElement = null;
+    let canvasElement = null;
+    let canvasContext = null;
+    let isCapturing = false;
+    let isEncoding = false;
+    let screenInfo = null;
+    let targetFps = 60;
+
+    // Custom cursor image (SVG)
+    const cursorImg = new Image();
+    cursorImg.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="black" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg>';
+
+    if (window.electronAPI) {
+      window.electronAPI.onCaptureTick(() => {
+        if (!isEncoding) captureNextFrame();
+      });
+    }
+
+    async function captureNextFrame() {
+      if (!isCapturing || !videoElement || videoElement.paused || videoElement.ended) return;
+      isEncoding = true;
+
       try {
-        if (!window.electronAPI) return;
-        const status = await window.electronAPI.getStatus();
-        document.getElementById('clients-count').textContent =
-          `${status.clients} client${status.clients !== 1 ? 's' : ''} · ${status.fps} FPS`;
-      } catch (err) {}
+        canvasContext.drawImage(videoElement, 0, 0, 1280, 720);
+        
+        // Draw native OS cursor manually
+        if (screenInfo && window.electronAPI) {
+          try {
+            const cursor = await window.electronAPI.getCursorPosition();
+            const scaleX = 1280 / screenInfo.width;
+            const scaleY = 720 / screenInfo.height;
+            canvasContext.drawImage(cursorImg, cursor.x * scaleX, cursor.y * scaleY, 20, 20);
+          } catch(e) { }
+        }
+
+        // Convert canvas to JPEG blob asynchronously
+        const blob = await new Promise(resolve => canvasElement.toBlob(resolve, 'image/jpeg', 0.6));
+        
+        if (blob && isCapturing) {
+          const arrayBuffer = await blob.arrayBuffer();
+          if (window.electronAPI && isCapturing) {
+            window.electronAPI.sendFrame(arrayBuffer);
+          }
+        }
+      } catch (err) {
+        console.error('[Capture Loop] Draw/Blob error:', err.message);
+      } finally {
+        isEncoding = false;
+      }
+    }
+
+    async function startScreenCapture() {
+      if (isCapturing) return;
+      isCapturing = true;
+      try {
+        if (window.electronAPI) {
+          screenInfo = await window.electronAPI.getScreenInfo();
+        }
+
+        const sourceId = await window.electronAPI.getPrimarySourceId();
+        if (!sourceId) {
+          throw new Error('No desktop source found');
+        }
+
+        streamInstance = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: sourceId,
+              minWidth: 1280,
+              maxWidth: 1280,
+              minHeight: 720,
+              maxHeight: 720
+            }
+          }
+        });
+
+        videoElement = document.createElement('video');
+        videoElement.srcObject = streamInstance;
+        videoElement.muted = true;
+        videoElement.playsInline = true;
+
+        canvasElement = document.createElement('canvas');
+        canvasElement.width = 1280;
+        canvasElement.height = 720;
+        canvasContext = canvasElement.getContext('2d');
+
+        videoElement.onloadedmetadata = () => {
+          videoElement.play();
+          
+          const track = streamInstance.getVideoTracks()[0];
+          const settings = track.getSettings();
+          targetFps = settings.frameRate || 60;
+          console.log(`[Capture] Starting capture at ${targetFps} FPS`);
+          
+          if (window.electronAPI) {
+            window.electronAPI.startCaptureTimer(targetFps);
+          }
+        };
+      } catch (err) {
+        console.error('[Capture] Failed to start screen capture:', err.message);
+        isCapturing = false;
+      }
+    }
+
+    function stopScreenCapture() {
+      isCapturing = false;
+      isEncoding = false;
+      if (window.electronAPI) {
+        window.electronAPI.stopCaptureTimer();
+      }
+      if (streamInstance) {
+        streamInstance.getTracks().forEach(track => track.stop());
+        streamInstance = null;
+      }
+      if (videoElement) {
+        videoElement.pause();
+        videoElement.srcObject = null;
+        videoElement = null;
+      }
+      canvasElement = null;
+      canvasContext = null;
     }
 
     // Window controls
@@ -461,7 +577,22 @@
 
     // Start after a small delay to ensure preload is ready
     setTimeout(init, 500);
-    setInterval(updateStatus, 3000);
+
+    // Listen for connection status updates to dynamically toggle capture
+    if (window.electronAPI && window.electronAPI.onStatusUpdate) {
+      window.electronAPI.onStatusUpdate((status) => {
+        // Update client count and server-reported FPS
+        document.getElementById('clients-count').textContent =
+          `${status.clients} client${status.clients !== 1 ? 's' : ''} · ${status.fps} FPS`;
+
+        // Start/Stop capture based on client count
+        if (status.clients > 0) {
+          startScreenCapture();
+        } else {
+          stopScreenCapture();
+        }
+      });
+    }
   </script>
 </body>
 </html>

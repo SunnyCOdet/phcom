@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, clipboard, Tray, Menu, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard, Tray, Menu, nativeImage, dialog, desktopCapturer, screen } = require('electron');
 const path = require('path');
 const { startServer, stopServer, getStatus } = require('./src/server/index');
 const { getLocalIP, generateQRCode, startMDNS, stopMDNS, startNgrokTunnel, getNgrokUrl } = require('./src/server/network');
@@ -28,7 +28,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      backgroundThrottling: false
     }
   });
 
@@ -138,6 +139,45 @@ function createTray() {
 
 // ─── IPC Handlers ───────────────────────────────────────────────────────────
 function setupIPC() {
+  let captureInterval = null;
+
+  ipcMain.on('start-capture-timer', (event, fps) => {
+    if (captureInterval) clearInterval(captureInterval);
+    captureInterval = setInterval(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('capture-tick');
+      }
+    }, 1000 / fps);
+  });
+
+  ipcMain.on('stop-capture-timer', () => {
+    if (captureInterval) clearInterval(captureInterval);
+  });
+  ipcMain.handle('get-primary-source-id', async () => {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      return sources.length > 0 ? sources[0].id : null;
+    } catch (err) {
+      console.error('[main] Failed to get desktop sources:', err.message);
+      return null;
+    }
+  });
+
+  ipcMain.on('new-frame', (event, arrayBuffer) => {
+    const buffer = Buffer.from(arrayBuffer);
+    const screenCapture = require('./src/server/screen-capture');
+    screenCapture.handleRendererFrame(buffer);
+  });
+
+  ipcMain.handle('get-cursor-position', () => {
+    return screen.getCursorScreenPoint();
+  });
+
+  ipcMain.handle('get-screen-info', () => {
+    const primaryDisplay = screen.getPrimaryDisplay();
+    return primaryDisplay.bounds;
+  });
+
   ipcMain.handle('get-connection-info', async () => {
     const primaryURL = tunnelURL || connectionURL;
     const qrCode = await generateQRCode(primaryURL);
@@ -207,6 +247,13 @@ async function startup() {
     // Create window and tray
     createWindow();
     createTray();
+
+    // Start periodic status updates to renderer
+    setInterval(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('status-update', getStatus());
+      }
+    }, 1000);
 
     console.log('[Magical Newton] Ready! Scan the QR code with your iPhone.');
   } catch (err) {

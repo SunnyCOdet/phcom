@@ -237,7 +237,7 @@
   // ─── Screen Rendering ─────────────────────────────────
 
   function handleFrame(buffer) {
-    const blob = new Blob([buffer], { type: 'image/webp' });
+    const blob = new Blob([buffer], { type: 'image/jpeg' });
 
     createImageBitmap(blob).then((bitmap) => {
       pendingFrame = bitmap;
