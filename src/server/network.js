@@ -34,28 +34,42 @@ function loadEnv() {
 let publishedService = null;
 let tunnelUrl = null;
 
+// Interface name patterns to skip (virtual adapters, cross-OS).
+const VIRTUAL_IFACE_PATTERNS = [
+  'vethernet', 'wsl', 'virtual', 'vmware', 'vbox', 'docker',
+  'loopback', 'utun', 'awdl', 'llw', 'bridge', 'tun', 'tap',
+];
+
+// Interface name patterns we prefer (Wi-Fi / primary LAN), across OSes:
+// Windows "Wi-Fi"/"Wireless", macOS "en0", Linux "wlan0"/"wlp*"/"eth0"/"enp*".
+const PREFERRED_IFACE_PATTERNS = [
+  'wi-fi', 'wireless', 'wlan', 'wlp', 'en0', 'en1', 'eth', 'enp', 'ens',
+];
+
 /**
- * Get the first non-internal IPv4 address from network interfaces.
+ * Get the best non-internal IPv4 address from network interfaces.
+ * Skips virtual adapters and prefers Wi-Fi / primary LAN interfaces across
+ * Windows, macOS, and Linux naming conventions.
  * @returns {string} Local IP address or '127.0.0.1' if none found
  */
 function getLocalIP() {
   try {
     const interfaces = os.networkInterfaces();
     let bestIp = '127.0.0.1';
-    
+
     for (const name of Object.keys(interfaces)) {
-      // Ignore virtual network interfaces
-      if (name.toLowerCase().includes('vethernet') || 
-          name.toLowerCase().includes('wsl') || 
-          name.toLowerCase().includes('virtual')) {
+      const lowerName = name.toLowerCase();
+
+      // Ignore virtual / non-physical network interfaces
+      if (VIRTUAL_IFACE_PATTERNS.some((p) => lowerName.includes(p))) {
         continue;
       }
-      
+
       for (const iface of interfaces[name]) {
         if (iface.family === 'IPv4' && !iface.internal) {
           bestIp = iface.address;
-          // Prefer Wi-Fi if we find it
-          if (name.toLowerCase().includes('wi-fi') || name.toLowerCase().includes('wireless')) {
+          // Prefer a recognized Wi-Fi / primary LAN interface if we find one
+          if (PREFERRED_IFACE_PATTERNS.some((p) => lowerName.includes(p))) {
             return bestIp;
           }
         }

@@ -73,11 +73,20 @@ function checkNotifications() {
 
 function start(broadcastFn) {
   if (notificationInterval) return;
+
+  // System notification mirroring is implemented via the Windows notification
+  // database (WPN). There is no equivalent here on other platforms, so we skip
+  // it gracefully rather than polling for nothing.
+  if (process.platform !== 'win32') {
+    console.log(`[notifications] System notification mirroring not supported on ${process.platform} — skipping`);
+    return;
+  }
+
   broadcastCallback = broadcastFn;
-  
+
   // Set initial lastNotificationId
   checkNotifications();
-  
+
   // Poll every 1 second
   notificationInterval = setInterval(checkNotifications, 1000);
   console.log('[notifications] Started Windows notification listener');

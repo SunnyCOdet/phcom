@@ -11,89 +11,58 @@ const MEDIA_KEY_MAP = {
   prevtrack: Key.AudioPrev,
 };
 
-// Fallback PowerShell commands for media actions
-const POWERSHELL_FALLBACKS = {
-  volumeup: `
-    Add-Type -AssemblyName System.Windows.Forms;
-    [System.Windows.Forms.SendKeys]::SendWait([char]0xAF)
-  `,
-  volumedown: `
-    Add-Type -AssemblyName System.Windows.Forms;
-    [System.Windows.Forms.SendKeys]::SendWait([char]0xAE)
-  `,
-  mute: `
-    Add-Type -AssemblyName System.Windows.Forms;
-    [System.Windows.Forms.SendKeys]::SendWait([char]0xAD)
-  `,
-  playpause: `
-    Add-Type -AssemblyName System.Windows.Forms;
-    [System.Windows.Forms.SendKeys]::SendWait([char]0xB3)
-  `,
-  nexttrack: `
-    Add-Type -AssemblyName System.Windows.Forms;
-    [System.Windows.Forms.SendKeys]::SendWait([char]0xB0)
-  `,
-  prevtrack: `
-    Add-Type -AssemblyName System.Windows.Forms;
-    [System.Windows.Forms.SendKeys]::SendWait([char]0xB1)
-  `,
+// Per-platform shell fallbacks, used only if nut-js fails. Each value is a
+// shell command string (or null if that action has no fallback on the OS).
+const SHELL_FALLBACKS = {
+  win32: {
+    volumeup: 'powershell -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait([char]0xAF)"',
+    volumedown: 'powershell -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait([char]0xAE)"',
+    mute: 'powershell -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait([char]0xAD)"',
+    playpause: 'powershell -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait([char]0xB3)"',
+    nexttrack: 'powershell -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait([char]0xB0)"',
+    prevtrack: 'powershell -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait([char]0xB1)"',
+  },
+  darwin: {
+    // macOS: volume via AppleScript; transport keys have no reliable CLI, rely on nut-js.
+    volumeup: `osascript -e "set volume output volume (output volume of (get volume settings) + 10)"`,
+    volumedown: `osascript -e "set volume output volume (output volume of (get volume settings) - 10)"`,
+    mute: `osascript -e "set volume output muted (not (output muted of (get volume settings)))"`,
+    playpause: null,
+    nexttrack: null,
+    prevtrack: null,
+  },
+  linux: {
+    // Linux: PulseAudio/PipeWire for volume, playerctl (MPRIS) for transport.
+    volumeup: 'pactl set-sink-volume @DEFAULT_SINK@ +5%',
+    volumedown: 'pactl set-sink-volume @DEFAULT_SINK@ -5%',
+    mute: 'pactl set-sink-mute @DEFAULT_SINK@ toggle',
+    playpause: 'playerctl play-pause',
+    nexttrack: 'playerctl next',
+    prevtrack: 'playerctl previous',
+  },
 };
 
-// Nircmd fallback commands
-const NIRCMD_FALLBACKS = {
-  volumeup: 'nircmd changesysvolume 5000',
-  volumedown: 'nircmd changesysvolume -5000',
-  mute: 'nircmd mutesysvolume 2',
-  playpause: 'nircmd sendkeypress 0xB3',
-  nexttrack: 'nircmd sendkeypress 0xB0',
-  prevtrack: 'nircmd sendkeypress 0xB1',
-};
+const PLATFORM_FALLBACKS = SHELL_FALLBACKS[process.platform] || SHELL_FALLBACKS.linux;
 
 /**
- * Execute a PowerShell fallback command for media control.
+ * Run the OS-native shell fallback for a media action, if one exists.
  * @param {string} action - Normalized action name
- * @returns {Promise<boolean>} Whether the fallback succeeded
+ * @returns {Promise<boolean>} Whether the fallback ran successfully
  */
-function tryPowerShellFallback(action) {
+function tryShellFallback(action) {
   return new Promise((resolve) => {
-    const psCommand = POWERSHELL_FALLBACKS[action];
-    if (!psCommand) {
+    const command = PLATFORM_FALLBACKS[action];
+    if (!command) {
       resolve(false);
       return;
     }
 
-    const command = `powershell -NoProfile -NonInteractive -Command "${psCommand.replace(/\n/g, ' ').trim()}"`;
     exec(command, { timeout: 5000 }, (err) => {
       if (err) {
-        console.warn(`[media-keys] PowerShell fallback failed for ${action}:`, err.message);
+        console.warn(`[media-keys] Shell fallback failed for ${action}:`, err.message);
         resolve(false);
       } else {
-        console.log(`[media-keys] PowerShell fallback succeeded for ${action}`);
-        resolve(true);
-      }
-    });
-  });
-}
-
-/**
- * Execute a nircmd fallback command for media control.
- * @param {string} action - Normalized action name
- * @returns {Promise<boolean>} Whether the fallback succeeded
- */
-function tryNircmdFallback(action) {
-  return new Promise((resolve) => {
-    const nircmdCommand = NIRCMD_FALLBACKS[action];
-    if (!nircmdCommand) {
-      resolve(false);
-      return;
-    }
-
-    exec(nircmdCommand, { timeout: 5000 }, (err) => {
-      if (err) {
-        console.warn(`[media-keys] nircmd fallback failed for ${action}:`, err.message);
-        resolve(false);
-      } else {
-        console.log(`[media-keys] nircmd fallback succeeded for ${action}`);
+        console.log(`[media-keys] Shell fallback succeeded for ${action}`);
         resolve(true);
       }
     });
@@ -102,7 +71,7 @@ function tryNircmdFallback(action) {
 
 /**
  * Perform a media key action.
- * Tries nut-js first, then falls back to PowerShell SendKeys, then nircmd.
+ * Tries nut-js first, then falls back to the OS-native shell command.
  * @param {string} action - One of: volumeUp, volumeDown, mute, playPause, nextTrack, prevTrack
  * @returns {Promise<{success: boolean, action: string, method: string}>}
  */
@@ -134,16 +103,10 @@ async function mediaAction(action) {
     console.warn(`[media-keys] nut-js failed for ${normalized}:`, nutErr.message);
   }
 
-  // Fallback to PowerShell
-  const psSuccess = await tryPowerShellFallback(normalized);
-  if (psSuccess) {
-    return { success: true, action: normalized, method: 'powershell' };
-  }
-
-  // Fallback to nircmd
-  const nircmdSuccess = await tryNircmdFallback(normalized);
-  if (nircmdSuccess) {
-    return { success: true, action: normalized, method: 'nircmd' };
+  // Fallback to the OS-native shell command
+  const shellSuccess = await tryShellFallback(normalized);
+  if (shellSuccess) {
+    return { success: true, action: normalized, method: 'shell' };
   }
 
   return {

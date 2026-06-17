@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, clipboard, Tray, Menu, nativeImage, dialog, desktopCapturer, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard, Tray, Menu, nativeImage, dialog, desktopCapturer, screen, systemPreferences } = require('electron');
 const path = require('path');
 const { startServer, stopServer, getStatus, sendRTCToClient, setCaptureSignalHandler } = require('./src/server/index');
 const { getLocalIP, generateQRCode, startMDNS, stopMDNS, startTunnel, getTunnelUrl } = require('./src/server/network');
@@ -56,14 +56,14 @@ function createTray() {
 
   tray = new Tray(icon);
   const displayURL = tunnelURL || connectionURL;
-  tray.setToolTip(`Magical Newton - ${displayURL}`);
+  tray.setToolTip(`pcphone - ${displayURL}`);
 
   const updateContextMenu = () => {
     const status = getStatus();
     const activeURL = tunnelURL || connectionURL;
     const contextMenu = Menu.buildFromTemplate([
       {
-        label: `🖥️  Magical Newton`,
+        label: `🖥️  pcphone`,
         enabled: false
       },
       { type: 'separator' },
@@ -261,25 +261,57 @@ function setupIPC() {
   });
 }
 
+// ─── macOS Screen Recording Permission ──────────────────────────────────────
+// On macOS 10.15+, desktopCapturer/getUserMedia for the screen requires the
+// "Screen Recording" permission. Once granted it only takes effect after a
+// restart, so we warn the user up front rather than failing silently.
+function checkScreenCapturePermission() {
+  if (process.platform !== 'darwin') return;
+  try {
+    const status = systemPreferences.getMediaAccessStatus('screen');
+    console.log(`[pcphone] macOS screen recording permission: ${status}`);
+    if (status !== 'granted') {
+      dialog.showMessageBox({
+        type: 'info',
+        title: 'Screen Recording Permission Needed',
+        message: 'pcphone needs Screen Recording permission to stream your screen.',
+        detail: 'Open System Settings → Privacy & Security → Screen Recording, enable pcphone, then quit and reopen the app.',
+        buttons: ['OK'],
+      }).catch(() => {});
+    }
+  } catch (err) {
+    console.warn('[pcphone] Could not query screen recording permission:', err.message);
+  }
+}
+
 // ─── Startup Sequence ───────────────────────────────────────────────────────
 async function startup() {
   try {
-    console.log('[Magical Newton] ========================================');
-    console.log('[Magical Newton] Starting Magical Newton Remote Desktop');
-    console.log('[Magical Newton] ========================================');
+    console.log('[pcphone] ========================================');
+    console.log('[pcphone] Starting pcphone Remote Desktop');
+    console.log(`[pcphone] Platform: ${process.platform} (${process.arch})`);
+    console.log('[pcphone] ========================================');
+
+    // This is a tray/menu-bar app — hide the macOS Dock icon.
+    if (process.platform === 'darwin' && app.dock) {
+      app.dock.hide();
+    }
+
+    // Warn early if macOS screen recording permission is missing.
+    checkScreenCapturePermission();
 
     // Setup IPC FIRST (before window creation)
     setupIPC();
-    console.log('[Magical Newton] IPC handlers registered');
+    console.log('[pcphone] IPC handlers registered');
 
     // Detect local IP
     localIP = getLocalIP();
     connectionURL = `http://${localIP}:${PORT}`;
-    console.log(`[Magical Newton] Local IP: ${localIP}`);
-    console.log(`[Magical Newton] Connection URL: ${connectionURL}`);
+    console.log(`[pcphone] Local IP: ${localIP}`);
+    console.log(`[pcphone] Connection URL: ${connectionURL}`);
 
     // Start web server
-    console.log(`[Magical Newton] Starting HTTP/WS server on port ${PORT}...`);
+    console.log(`[pcphone] Starting HTTP/WS server on port ${PORT}...`);
     serverInstance = await startServer(PORT);
     setCaptureSignalHandler((message) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -289,26 +321,26 @@ async function startup() {
         console.warn('[main] Cannot forward RTC signal - mainWindow not available');
       }
     });
-    console.log(`[Magical Newton] ✅ Server started on port ${PORT}`);
+    console.log(`[pcphone] ✅ Server started on port ${PORT}`);
 
     // Start mDNS advertisement
     startMDNS(PORT);
-    console.log(`[Magical Newton] ✅ mDNS advertised as my-pc.local:${PORT}`);
+    console.log(`[pcphone] ✅ mDNS advertised as my-pc.local:${PORT}`);
 
     // Start localtunnel
-    console.log('[Magical Newton] Starting tunnel...');
+    console.log('[pcphone] Starting tunnel...');
     tunnelURL = await startTunnel(PORT);
     if (tunnelURL) {
-      console.log(`[Magical Newton] ✅ Tunnel URL: ${tunnelURL}`);
+      console.log(`[pcphone] ✅ Tunnel URL: ${tunnelURL}`);
     } else {
-      console.log('[Magical Newton] ⚠️  Tunnel failed - using local network only');
+      console.log('[pcphone] ⚠️  Tunnel failed - using local network only');
     }
 
     // Create window and tray
-    console.log('[Magical Newton] Creating window and tray...');
+    console.log('[pcphone] Creating window and tray...');
     createWindow();
     createTray();
-    console.log('[Magical Newton] ✅ Window and tray created');
+    console.log('[pcphone] ✅ Window and tray created');
 
     // Start periodic status updates to renderer
     setInterval(() => {
@@ -317,12 +349,12 @@ async function startup() {
       }
     }, 1000);
 
-    console.log('[Magical Newton] ========================================');
-    console.log('[Magical Newton] ✅ Ready! Scan the QR code with your iPhone.');
-    console.log('[Magical Newton] ========================================');
+    console.log('[pcphone] ========================================');
+    console.log('[pcphone] ✅ Ready! Scan the QR code with any phone.');
+    console.log('[pcphone] ========================================');
   } catch (err) {
-    console.error('[Magical Newton] ❌ Startup error:', err.message);
-    console.error('[Magical Newton] Stack:', err.stack);
+    console.error('[pcphone] ❌ Startup error:', err.message);
+    console.error('[pcphone] Stack:', err.stack);
     dialog.showErrorBox('Startup Error', err.message);
   }
 }
@@ -331,15 +363,15 @@ async function startup() {
 app.whenReady().then(startup);
 
 app.on('window-all-closed', (e) => {
-  console.log('[Magical Newton] All windows closed - staying in tray');
+  console.log('[pcphone] All windows closed - staying in tray');
 });
 
 app.on('before-quit', () => {
-  console.log('[Magical Newton] Application quitting...');
+  console.log('[pcphone] Application quitting...');
   isQuitting = true;
   stopMDNS();
   stopServer();
-  console.log('[Magical Newton] Cleanup complete');
+  console.log('[pcphone] Cleanup complete');
 });
 
 app.on('activate', () => {

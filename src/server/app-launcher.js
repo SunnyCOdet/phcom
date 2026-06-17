@@ -1,24 +1,51 @@
 const { exec } = require('child_process');
 
-// Predefined list of launchable applications
-const APPS = [
-  { name: 'Chrome', icon: '🌐', command: 'start chrome' },
-  { name: 'VS Code', icon: '💻', command: 'code' },
-  { name: 'Notepad', icon: '📝', command: 'notepad' },
-  { name: 'Explorer', icon: '📁', command: 'explorer' },
-  { name: 'Task Manager', icon: '📊', command: 'taskmgr' },
-  { name: 'Terminal', icon: '⬛', command: 'wt' },
-  { name: 'Calculator', icon: '🔢', command: 'calc' },
-  { name: 'Settings', icon: '⚙️', command: 'start ms-settings:' },
-  { name: 'Paint', icon: '🎨', command: 'mspaint' },
-  { name: 'Snipping Tool', icon: '✂️', command: 'snippingtool' },
-  { name: 'CMD', icon: '▶️', command: 'cmd' },
-  { name: 'PowerShell', icon: '🔵', command: 'powershell' },
-];
+// Per-platform app catalogs. `command` is the OS-native way to launch the app.
+const APPS_BY_PLATFORM = {
+  win32: [
+    { name: 'Chrome', icon: '🌐', command: 'start chrome' },
+    { name: 'VS Code', icon: '💻', command: 'code' },
+    { name: 'Notepad', icon: '📝', command: 'notepad' },
+    { name: 'Explorer', icon: '📁', command: 'explorer' },
+    { name: 'Task Manager', icon: '📊', command: 'taskmgr' },
+    { name: 'Terminal', icon: '⬛', command: 'wt' },
+    { name: 'Calculator', icon: '🔢', command: 'calc' },
+    { name: 'Settings', icon: '⚙️', command: 'start ms-settings:' },
+    { name: 'Paint', icon: '🎨', command: 'mspaint' },
+    { name: 'Snipping Tool', icon: '✂️', command: 'snippingtool' },
+    { name: 'CMD', icon: '▶️', command: 'cmd' },
+    { name: 'PowerShell', icon: '🔵', command: 'powershell' },
+  ],
+  darwin: [
+    { name: 'Chrome', icon: '🌐', command: 'open -a "Google Chrome"' },
+    { name: 'Safari', icon: '🧭', command: 'open -a Safari' },
+    { name: 'VS Code', icon: '💻', command: 'open -a "Visual Studio Code"' },
+    { name: 'Finder', icon: '📁', command: 'open ~' },
+    { name: 'Activity Monitor', icon: '📊', command: 'open -a "Activity Monitor"' },
+    { name: 'Terminal', icon: '⬛', command: 'open -a Terminal' },
+    { name: 'Calculator', icon: '🔢', command: 'open -a Calculator' },
+    { name: 'Settings', icon: '⚙️', command: 'open -a "System Settings"' },
+    { name: 'TextEdit', icon: '📝', command: 'open -a TextEdit' },
+    { name: 'Notes', icon: '🗒️', command: 'open -a Notes' },
+  ],
+  linux: [
+    { name: 'Firefox', icon: '🌐', command: 'firefox' },
+    { name: 'VS Code', icon: '💻', command: 'code' },
+    { name: 'Files', icon: '📁', command: 'xdg-open ~' },
+    { name: 'System Monitor', icon: '📊', command: 'gnome-system-monitor' },
+    { name: 'Terminal', icon: '⬛', command: 'x-terminal-emulator' },
+    { name: 'Calculator', icon: '🔢', command: 'gnome-calculator' },
+    { name: 'Settings', icon: '⚙️', command: 'gnome-control-center' },
+    { name: 'Text Editor', icon: '📝', command: 'gedit' },
+  ],
+};
+
+// Resolve the catalog for the current OS, defaulting to Linux-style commands.
+const APPS = APPS_BY_PLATFORM[process.platform] || APPS_BY_PLATFORM.linux;
 
 /**
- * Get the list of available applications.
- * @returns {Array<{name: string, icon: string, command: string}>}
+ * Get the list of available applications for the current platform.
+ * @returns {Array<{name: string, icon: string}>}
  */
 function getApps() {
   // Return a copy without the command field for security
@@ -58,7 +85,7 @@ function launchApp(appName) {
         timeout: 10000,
       }, (err) => {
         if (err) {
-          // Some apps (like 'start' commands) may return non-zero but still launch
+          // Some apps (like 'start'/'open' commands) may return non-zero but still launch
           console.warn(`[app-launcher] Exec warning for "${app.name}":`, err.message);
         }
       });

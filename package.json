@@ -1,7 +1,7 @@
 {
-  "name": "magical-newton",
+  "name": "pcphone",
   "version": "1.0.0",
-  "description": "iPhone Web Remote Desktop for Personal PC",
+  "description": "pcphone — control your PC from any phone over the web",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
