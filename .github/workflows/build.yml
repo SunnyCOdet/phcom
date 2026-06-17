@@ -27,8 +27,23 @@ jobs:
         with:
           node-version: 20
 
+      # node-gyp (used by @electron/rebuild) needs distutils, removed in
+      # Python 3.12. Pin 3.11 so any native module that builds from source works.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install dependencies
         run: npm install
+
+      # bufferutil and utf-8-validate are optional perf addons for `ws` (pulled
+      # in transitively) that have no Electron prebuilds, so @electron/rebuild
+      # tries to compile them from source and fails on CI toolchains. ws falls
+      # back to pure JS without them, so just remove them before packaging.
+      - name: Remove optional ws native addons
+        shell: bash
+        run: node -e "const fs=require('fs');for(const d of ['bufferutil','utf-8-validate'])fs.rmSync('node_modules/'+d,{recursive:true,force:true})"
 
       - name: Build installers
         run: npx electron-builder --publish never
