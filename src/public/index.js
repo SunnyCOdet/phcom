@@ -64,6 +64,10 @@
     btnModeTouch:       $('#btn-mode-touch'),
     btnModeTrackpad:    $('#btn-mode-trackpad'),
     controlModeValue:   $('#control-mode-value'),
+    // Audio toggle
+    btnAudioUnmute:     $('#btn-audio-unmute'),
+    btnAudioMute:       $('#btn-audio-mute'),
+    audioStatusValue:   $('#audio-status-value'),
   };
 
   const ctx = dom.canvas.getContext('2d', { alpha: false, desynchronized: true });
@@ -362,6 +366,7 @@
     }
 
     dom.canvas.style.opacity = '';
+    audioUnmuted = false;
   }
 
   function serializeRTCDescription(description) {
@@ -399,15 +404,28 @@
       const track = event.track;
       const settings = track.getSettings ? track.getSettings() : {};
       console.log('[RTC] Track settings:', JSON.stringify(settings));
-      const video = createRTCVideo();
-      video.srcObject = event.streams[0];
-      video.play().catch((err) => {
-        console.warn('[RTC] Video play blocked:', err.message);
-      });
-      video.onloadedmetadata = () => {
-        console.log('[RTC] Video metadata loaded: ' + video.videoWidth + 'x' + video.videoHeight);
-      };
-      startRTCRenderLoop();
+
+      if (track.kind === 'video') {
+        const video = createRTCVideo();
+        video.srcObject = event.streams[0];
+        video.play().catch((err) => {
+          console.warn('[RTC] Video play blocked:', err.message);
+        });
+        video.onloadedmetadata = () => {
+          console.log('[RTC] Video metadata loaded: ' + video.videoWidth + 'x' + video.videoHeight);
+        };
+        startRTCRenderLoop();
+      } else if (track.kind === 'audio') {
+        console.log('[RTC] \u266b Audio track received — PC audio streaming enabled');
+        // The audio track is part of the same stream as video.
+        // We use the rtcVideo element to play both (synced).
+        // It starts muted for iOS autoplay; unmute on first touch.
+        const video = createRTCVideo();
+        if (video.srcObject !== event.streams[0]) {
+          video.srcObject = event.streams[0];
+        }
+        tryUnmuteAudio();
+      }
     };
 
     peer.onconnectionstatechange = () => {
@@ -1476,6 +1494,59 @@
       showToast('Switched to Trackpad Mode', 'info');
     });
 
+    // ─── PC Audio Toggle ─────
+    function updateAudioToggleUI() {
+      if (audioUnmuted) {
+        dom.btnAudioUnmute.classList.add('active');
+        dom.btnAudioMute.classList.remove('active');
+        dom.audioStatusValue.textContent = 'Playing';
+      } else {
+        dom.btnAudioUnmute.classList.remove('active');
+        dom.btnAudioMute.classList.add('active');
+        dom.audioStatusValue.textContent = 'Muted';
+      }
+    }
+
+    // Restore saved audio preference
+    const savedAudio = localStorage.getItem('rd_pcAudio');
+    if (savedAudio === 'unmuted') {
+      tryUnmuteAudio();
+    }
+    updateAudioToggleUI();
+
+    dom.btnAudioUnmute.addEventListener('click', () => {
+      if (rtcVideo) {
+        rtcVideo.muted = false;
+        rtcVideo.play().then(() => {
+          audioUnmuted = true;
+          localStorage.setItem('rd_pcAudio', 'unmuted');
+          updateAudioToggleUI();
+          showToast('🔊 PC Audio On', 'info');
+        }).catch(() => {
+          showToast('Tap the screen first, then try again', 'info');
+        });
+      } else {
+        // No RTC connection yet — save preference, will unmute when connected
+        audioUnmuted = true;
+        localStorage.setItem('rd_pcAudio', 'unmuted');
+        updateAudioToggleUI();
+        showToast('🔊 Audio will play when connected', 'info');
+      }
+    });
+
+    dom.btnAudioMute.addEventListener('click', () => {
+      if (rtcVideo) {
+        rtcVideo.muted = true;
+      }
+      audioUnmuted = false;
+      localStorage.setItem('rd_pcAudio', 'muted');
+      updateAudioToggleUI();
+      showToast('🔇 PC Audio Muted', 'info');
+    });
+
+    // Expose update function globally so tryUnmuteAudio can call it
+    window._updateAudioToggleUI = updateAudioToggleUI;
+
     dom.qualitySlider.addEventListener('input', () => {
       quality = parseInt(dom.qualitySlider.value, 10);
       dom.qualityValue.textContent = quality;
@@ -1547,8 +1618,27 @@
 
   let reconnectTimeout;
 
-  // ─── Audio Context Unlocking ──────────────────────────
+  // ─── Audio Context Unlocking + RTC Audio Unmuting ─────
   let globalAudioCtx = null;
+  let audioUnmuted = false;
+
+  function tryUnmuteAudio() {
+    if (audioUnmuted || !rtcVideo) return;
+    // Only auto-unmute if user has previously chosen to unmute
+    const savedPref = localStorage.getItem('rd_pcAudio');
+    if (savedPref === 'muted') return;
+    // Try to unmute
+    rtcVideo.muted = false;
+    rtcVideo.play().then(() => {
+      audioUnmuted = true;
+      console.log('[Audio] \u266b PC audio unmuted successfully');
+      if (window._updateAudioToggleUI) window._updateAudioToggleUI();
+    }).catch((err) => {
+      // iOS blocks unmuted autoplay before user gesture
+      rtcVideo.muted = true;
+      console.log('[Audio] Unmute blocked (need user gesture):', err.message);
+    });
+  }
 
   function initAudio() {
     if (!globalAudioCtx) {
@@ -1567,10 +1657,20 @@
     } else if (globalAudioCtx.state === 'suspended') {
       globalAudioCtx.resume();
     }
+    // Also unmute WebRTC audio on user gesture (only if user hasn't chosen mute)
+    const savedAudioPref = localStorage.getItem('rd_pcAudio');
+    if (!audioUnmuted && rtcVideo && savedAudioPref !== 'muted') {
+      rtcVideo.muted = false;
+      rtcVideo.play().then(() => {
+        audioUnmuted = true;
+        console.log('[Audio] \u266b PC audio unmuted on user gesture');
+        if (window._updateAudioToggleUI) window._updateAudioToggleUI();
+      }).catch(() => {});
+    }
   }
 
-  document.addEventListener('touchstart', initAudio, { once: true });
-  document.addEventListener('mousedown', initAudio, { once: true });
+  document.addEventListener('touchstart', initAudio, { once: false });
+  document.addEventListener('mousedown', initAudio, { once: false });
 
   // ─── Initialization ────────────────────────────────────
 

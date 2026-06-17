@@ -640,11 +640,18 @@
       };
 
       if (streamInstance) {
-        log('[RTC] Adding ' + streamInstance.getVideoTracks().length + ' video track(s) to peer ' + clientId);
-        streamInstance.getVideoTracks().forEach((track) => {
+        const videoTracks = streamInstance.getVideoTracks();
+        const audioTracks = streamInstance.getAudioTracks();
+        log('[RTC] Adding ' + videoTracks.length + ' video + ' + audioTracks.length + ' audio track(s) to peer ' + clientId);
+        
+        videoTracks.forEach((track) => {
           track.contentHint = 'detail';
           const sender = peer.addTrack(track, streamInstance);
           applyRTCSenderQuality(sender);
+        });
+
+        audioTracks.forEach((track) => {
+          peer.addTrack(track, streamInstance);
         });
       } else {
         log('[RTC] WARNING: No stream instance available for peer ' + clientId);
@@ -944,8 +951,13 @@
         }
         console.log('[Capture] Source ID:', sourceId);
 
+        // Capture video + system audio in the same stream for perfect A/V sync
         const constraints = {
-          audio: false,
+          audio: {
+            mandatory: {
+              chromeMediaSource: 'desktop'
+            }
+          },
           video: {
             mandatory: {
               chromeMediaSource: 'desktop',
@@ -959,15 +971,33 @@
             }
           }
         };
-        log('[Capture] getUserMedia constraints: ' + JSON.stringify(constraints));
+        log('[Capture] getUserMedia constraints (audio+video): ' + JSON.stringify(constraints));
 
-        streamInstance = await navigator.mediaDevices.getUserMedia(constraints);
-        log('[Capture] Got media stream, tracks: ' + streamInstance.getTracks().length);
+        try {
+          streamInstance = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (avErr) {
+          // If audio+video fails, fall back to video-only
+          log('[Capture] ⚠️ Audio+video capture failed (' + avErr.message + '), falling back to video-only');
+          const videoOnlyConstraints = {
+            audio: false,
+            video: constraints.video
+          };
+          streamInstance = await navigator.mediaDevices.getUserMedia(videoOnlyConstraints);
+        }
 
-        streamInstance.getVideoTracks().forEach((track) => {
+        const videoTracks = streamInstance.getVideoTracks();
+        const audioTracks = streamInstance.getAudioTracks();
+        log('[Capture] Got media stream: ' + videoTracks.length + ' video + ' + audioTracks.length + ' audio track(s)');
+
+        videoTracks.forEach((track) => {
           track.contentHint = 'detail';
           const settings = track.getSettings();
           log('[Capture] Video track settings: ' + JSON.stringify(settings));
+        });
+
+        audioTracks.forEach((track) => {
+          const settings = track.getSettings();
+          log('[Capture] Audio track settings: ' + JSON.stringify(settings));
         });
 
         videoElement = document.createElement('video');
