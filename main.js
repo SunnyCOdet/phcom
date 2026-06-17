@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, clipboard, Tray, Menu, nativeImage, dialog, desktopCapturer, screen } = require('electron');
 const path = require('path');
-const { startServer, stopServer, getStatus } = require('./src/server/index');
+const { startServer, stopServer, getStatus, sendRTCToClient, setCaptureSignalHandler } = require('./src/server/index');
 const { getLocalIP, generateQRCode, startMDNS, stopMDNS, startTunnel, getTunnelUrl } = require('./src/server/network');
 
 const PORT = 7898;
@@ -143,11 +143,12 @@ function setupIPC() {
 
   ipcMain.on('start-capture-timer', (event, fps) => {
     if (captureInterval) clearInterval(captureInterval);
+    const safeFps = Math.max(5, Math.min(Number(fps) || 60, 60));
     captureInterval = setInterval(() => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('capture-tick');
       }
-    }, 1000 / fps);
+    }, 1000 / safeFps);
   });
 
   ipcMain.on('stop-capture-timer', () => {
@@ -169,13 +170,29 @@ function setupIPC() {
     screenCapture.handleRendererFrame(buffer);
   });
 
+  ipcMain.on('rtc-to-client', (event, message) => {
+    if (!message || !message.clientId) return;
+    sendRTCToClient(message.clientId, message);
+  });
+
   ipcMain.handle('get-cursor-position', () => {
     return screen.getCursorScreenPoint();
   });
 
   ipcMain.handle('get-screen-info', () => {
     const primaryDisplay = screen.getPrimaryDisplay();
-    return primaryDisplay.bounds;
+    const scaleFactor = primaryDisplay.scaleFactor || 1;
+    const logicalWidth = primaryDisplay.size.width;
+    const logicalHeight = primaryDisplay.size.height;
+
+    return {
+      ...primaryDisplay.bounds,
+      logicalWidth,
+      logicalHeight,
+      width: Math.round(logicalWidth * scaleFactor),
+      height: Math.round(logicalHeight * scaleFactor),
+      scaleFactor
+    };
   });
 
   ipcMain.handle('get-connection-info', async () => {
@@ -229,6 +246,11 @@ async function startup() {
 
     // Start web server
     serverInstance = await startServer(PORT);
+    setCaptureSignalHandler((message) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('rtc-to-capture', message);
+      }
+    });
     console.log(`[Magical Newton] Server started on port ${PORT}`);
 
     // Start mDNS advertisement

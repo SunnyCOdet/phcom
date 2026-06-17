@@ -8,12 +8,49 @@ let frameCount = 0;
 let fps = 0;
 let fpsInterval = null;
 
+const DEFAULT_SETTINGS = {
+  quality: 90,
+  maxFps: 60,
+  maxWidth: 3840,
+  maxHeight: 2160,
+};
+
+let streamSettings = { ...DEFAULT_SETTINGS };
+
 /**
  * Update the connected client count.
  * @param {number} count
  */
 function setClientCount(count) {
   connectedClientCount = count;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(value, max));
+}
+
+function updateSettings(nextSettings = {}) {
+  if (Number.isFinite(nextSettings.quality)) {
+    streamSettings.quality = clamp(Math.round(nextSettings.quality), 30, 95);
+  }
+
+  if (Number.isFinite(nextSettings.maxFps)) {
+    streamSettings.maxFps = clamp(Math.round(nextSettings.maxFps), 5, 60);
+  }
+
+  if (Number.isFinite(nextSettings.maxWidth)) {
+    streamSettings.maxWidth = clamp(Math.round(nextSettings.maxWidth), 640, 3840);
+  }
+
+  if (Number.isFinite(nextSettings.maxHeight)) {
+    streamSettings.maxHeight = clamp(Math.round(nextSettings.maxHeight), 360, 2160);
+  }
+
+  return getSettings();
+}
+
+function getSettings() {
+  return { ...streamSettings };
 }
 
 /**
@@ -83,6 +120,7 @@ function getStats() {
     avgEncodeMs: 0,
     totalFrameMs: 0,
     isCapturing,
+    settings: getSettings(),
   };
 }
 
@@ -90,6 +128,8 @@ module.exports = {
   start,
   stop,
   getStats,
+  getSettings,
+  updateSettings,
   setClientCount,
   handleRendererFrame,
 };

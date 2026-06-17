@@ -448,6 +448,211 @@
     let isEncoding = false;
     let screenInfo = null;
     let targetFps = 60;
+    let captureWidth = 1920;
+    let captureHeight = 1080;
+    const rtcPeers = new Map();
+    let captureSettings = {
+      quality: 90,
+      maxFps: 60,
+      maxWidth: 3840,
+      maxHeight: 2160
+    };
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(value, max));
+    }
+
+    function normalizeCaptureSettings(settings = {}) {
+      return {
+        quality: clamp(Math.round(Number(settings.quality) || captureSettings.quality), 30, 95),
+        maxFps: clamp(Math.round(Number(settings.maxFps) || captureSettings.maxFps), 5, 60),
+        maxWidth: clamp(Math.round(Number(settings.maxWidth) || captureSettings.maxWidth), 640, 3840),
+        maxHeight: clamp(Math.round(Number(settings.maxHeight) || captureSettings.maxHeight), 360, 2160)
+      };
+    }
+
+    function even(value) {
+      return Math.max(2, Math.floor(value / 2) * 2);
+    }
+
+    function getCaptureSize() {
+      const sourceWidth = screenInfo?.width || captureSettings.maxWidth;
+      const sourceHeight = screenInfo?.height || captureSettings.maxHeight;
+      const scale = Math.min(1, captureSettings.maxWidth / sourceWidth, captureSettings.maxHeight / sourceHeight);
+
+      return {
+        width: even(sourceWidth * scale),
+        height: even(sourceHeight * scale)
+      };
+    }
+
+    function applyCaptureSettings(settings) {
+      const previousFps = captureSettings.maxFps;
+      captureSettings = normalizeCaptureSettings(settings);
+
+      if (isCapturing && previousFps !== captureSettings.maxFps && window.electronAPI) {
+        window.electronAPI.startCaptureTimer(captureSettings.maxFps);
+      }
+
+      updateAllRTCSenderQuality();
+    }
+
+    function getRTCMaxBitrate() {
+      const pixels = captureWidth * captureHeight;
+      const qualityScale = captureSettings.quality / 90;
+      let bitrate = 25000000;
+
+      if (pixels > 2560 * 1440) {
+        bitrate = 80000000;
+      } else if (pixels > 1920 * 1080) {
+        bitrate = 45000000;
+      }
+
+      return Math.round(bitrate * qualityScale);
+    }
+
+    async function applyRTCSenderQuality(sender) {
+      if (!sender || !sender.track) return;
+
+      sender.track.contentHint = 'detail';
+
+      const params = sender.getParameters();
+      params.degradationPreference = 'maintain-resolution';
+      params.encodings = params.encodings && params.encodings.length > 0 ? params.encodings : [{}];
+      params.encodings[0] = {
+        ...params.encodings[0],
+        maxBitrate: getRTCMaxBitrate(),
+        maxFramerate: captureSettings.maxFps,
+        scaleResolutionDownBy: 1
+      };
+
+      try {
+        await sender.setParameters(params);
+      } catch (err) {
+        console.warn('[RTC] Could not apply sender quality:', err.message);
+      }
+    }
+
+    function updateAllRTCSenderQuality() {
+      for (const peer of rtcPeers.values()) {
+        peer.getSenders().forEach((sender) => applyRTCSenderQuality(sender));
+      }
+    }
+
+    function sendRTCToClient(message) {
+      if (window.electronAPI && window.electronAPI.sendRTCToClient) {
+        window.electronAPI.sendRTCToClient(message);
+      }
+    }
+
+    function serializeRTCDescription(description) {
+      return description ? { type: description.type, sdp: description.sdp } : null;
+    }
+
+    function serializeRTCIceCandidate(candidate) {
+      if (!candidate) return null;
+      if (typeof candidate.toJSON === 'function') return candidate.toJSON();
+
+      return {
+        candidate: candidate.candidate,
+        sdpMid: candidate.sdpMid,
+        sdpMLineIndex: candidate.sdpMLineIndex,
+        usernameFragment: candidate.usernameFragment
+      };
+    }
+
+    function closeRTCPeer(clientId) {
+      const peer = rtcPeers.get(clientId);
+      if (!peer) return;
+      peer.close();
+      rtcPeers.delete(clientId);
+    }
+
+    function closeAllRTCPeers() {
+      for (const clientId of rtcPeers.keys()) {
+        closeRTCPeer(clientId);
+      }
+    }
+
+    function createRTCPeer(clientId) {
+      closeRTCPeer(clientId);
+
+      const peer = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      peer.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendRTCToClient({ type: 'rtc-ice', clientId, candidate: serializeRTCIceCandidate(event.candidate) });
+        }
+      };
+
+      peer.onconnectionstatechange = () => {
+        if (['failed', 'closed'].includes(peer.connectionState)) {
+          closeRTCPeer(clientId);
+        }
+      };
+
+      if (streamInstance) {
+        streamInstance.getVideoTracks().forEach((track) => {
+          track.contentHint = 'detail';
+          const sender = peer.addTrack(track, streamInstance);
+          applyRTCSenderQuality(sender);
+        });
+      }
+
+      rtcPeers.set(clientId, peer);
+      return peer;
+    }
+
+    async function startRTCForClient(clientId) {
+      if (!clientId || !streamInstance) return;
+
+      try {
+        console.log(`[Stream] Starting WebRTC stream for ${clientId} at ${captureWidth}x${captureHeight}`);
+        const peer = createRTCPeer(clientId);
+        await Promise.all(peer.getSenders().map((sender) => applyRTCSenderQuality(sender)));
+        const offer = await peer.createOffer({ offerToReceiveVideo: false, offerToReceiveAudio: false });
+        await peer.setLocalDescription(offer);
+        sendRTCToClient({ type: 'rtc-offer', clientId, offer: serializeRTCDescription(peer.localDescription) });
+      } catch (err) {
+        console.error('[RTC] Failed to start peer:', err.message);
+        closeRTCPeer(clientId);
+      }
+    }
+
+    async function handleRTCSignal(message) {
+      if (!message || !message.clientId) return;
+
+      switch (message.type) {
+        case 'rtc-client-connected':
+        case 'rtc-ready':
+          await startRTCForClient(message.clientId);
+          break;
+        case 'rtc-answer': {
+          const peer = rtcPeers.get(message.clientId);
+          if (peer && message.answer && message.answer.type && message.answer.sdp) {
+            console.log(`[Stream] WebRTC answer received from ${message.clientId}`);
+            await peer.setRemoteDescription(new RTCSessionDescription(message.answer));
+          }
+          break;
+        }
+        case 'rtc-ice': {
+          const peer = rtcPeers.get(message.clientId);
+          if (peer && message.candidate && message.candidate.candidate) {
+            await peer.addIceCandidate(new RTCIceCandidate(message.candidate));
+          }
+          break;
+        }
+        case 'rtc-client-disconnected':
+        case 'rtc-fallback':
+          console.log(`[Stream] Client ${message.clientId} switched to JPEG fallback`);
+          closeRTCPeer(message.clientId);
+          break;
+        default:
+          break;
+      }
+    }
 
     // Custom cursor image (SVG)
     const cursorImg = new Image();
@@ -464,20 +669,20 @@
       isEncoding = true;
 
       try {
-        canvasContext.drawImage(videoElement, 0, 0, 1280, 720);
+        canvasContext.drawImage(videoElement, 0, 0, captureWidth, captureHeight);
         
         // Draw native OS cursor manually
         if (screenInfo && window.electronAPI) {
           try {
             const cursor = await window.electronAPI.getCursorPosition();
-            const scaleX = 1280 / screenInfo.width;
-            const scaleY = 720 / screenInfo.height;
+            const scaleX = captureWidth / screenInfo.width;
+            const scaleY = captureHeight / screenInfo.height;
             canvasContext.drawImage(cursorImg, cursor.x * scaleX, cursor.y * scaleY, 20, 20);
           } catch(e) { }
         }
 
-        // Convert canvas to JPEG blob asynchronously (WebP is too slow for 60FPS)
-        const blob = await new Promise(resolve => canvasElement.toBlob(resolve, 'image/jpeg', 0.7));
+        const jpegQuality = captureSettings.quality / 100;
+        const blob = await new Promise(resolve => canvasElement.toBlob(resolve, 'image/jpeg', jpegQuality));
         
         if (blob && isCapturing) {
           const arrayBuffer = await blob.arrayBuffer();
@@ -500,6 +705,11 @@
           screenInfo = await window.electronAPI.getScreenInfo();
         }
 
+        const targetSize = getCaptureSize();
+        captureWidth = targetSize.width;
+        captureHeight = targetSize.height;
+        console.log(`[Capture] Display logical ${screenInfo?.logicalWidth || '?'}x${screenInfo?.logicalHeight || '?'} @ ${screenInfo?.scaleFactor || 1}x, capturing ${captureWidth}x${captureHeight}`);
+
         const sourceId = await window.electronAPI.getPrimarySourceId();
         if (!sourceId) {
           throw new Error('No desktop source found');
@@ -511,12 +721,17 @@
             mandatory: {
               chromeMediaSource: 'desktop',
               chromeMediaSourceId: sourceId,
-              minWidth: 1280,
-              maxWidth: 1280,
-              minHeight: 720,
-              maxHeight: 720
+              minWidth: captureWidth,
+              maxWidth: captureWidth,
+              minHeight: captureHeight,
+              maxHeight: captureHeight,
+              maxFrameRate: captureSettings.maxFps
             }
           }
+        });
+
+        streamInstance.getVideoTracks().forEach((track) => {
+          track.contentHint = 'detail';
         });
 
         videoElement = document.createElement('video');
@@ -525,17 +740,19 @@
         videoElement.playsInline = true;
 
         canvasElement = document.createElement('canvas');
-        canvasElement.width = 1280;
-        canvasElement.height = 720;
-        canvasContext = canvasElement.getContext('2d');
+        canvasElement.width = captureWidth;
+        canvasElement.height = captureHeight;
+        canvasContext = canvasElement.getContext('2d', { alpha: false, desynchronized: true });
+        canvasContext.imageSmoothingEnabled = true;
+        canvasContext.imageSmoothingQuality = 'high';
 
         videoElement.onloadedmetadata = () => {
           videoElement.play();
           
           const track = streamInstance.getVideoTracks()[0];
           const settings = track.getSettings();
-          targetFps = settings.frameRate || 60;
-          console.log(`[Capture] Starting capture at ${targetFps} FPS`);
+          targetFps = Math.min(captureSettings.maxFps, settings.frameRate || captureSettings.maxFps);
+          console.log(`[Capture] Starting ${captureWidth}x${captureHeight} at ${targetFps} FPS, WebRTC bitrate ${Math.round(getRTCMaxBitrate() / 1000000)} Mbps`);
           
           if (window.electronAPI) {
             window.electronAPI.startCaptureTimer(targetFps);
@@ -557,6 +774,7 @@
         streamInstance.getTracks().forEach(track => track.stop());
         streamInstance = null;
       }
+      closeAllRTCPeers();
       if (videoElement) {
         videoElement.pause();
         videoElement.srcObject = null;
@@ -581,16 +799,32 @@
     // Listen for connection status updates to dynamically toggle capture
     if (window.electronAPI && window.electronAPI.onStatusUpdate) {
       window.electronAPI.onStatusUpdate((status) => {
+        if (status.capture && status.capture.settings) {
+          applyCaptureSettings(status.capture.settings);
+        }
+
         // Update client count and server-reported FPS
         document.getElementById('clients-count').textContent =
           `${status.clients} client${status.clients !== 1 ? 's' : ''} · ${status.fps} FPS`;
 
         // Start/Stop capture based on client count
         if (status.clients > 0) {
-          startScreenCapture();
+          startScreenCapture().then(() => {
+            (status.clientIds || []).forEach((clientId) => {
+              if (!rtcPeers.has(clientId)) startRTCForClient(clientId);
+            });
+          });
         } else {
           stopScreenCapture();
         }
+      });
+    }
+
+    if (window.electronAPI && window.electronAPI.onRTCSignal) {
+      window.electronAPI.onRTCSignal((message) => {
+        handleRTCSignal(message).catch((err) => {
+          console.error('[RTC] Signal error:', err.message);
+        });
       });
     }
   </script>

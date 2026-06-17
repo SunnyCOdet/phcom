@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCursorPosition: () => ipcRenderer.invoke('get-cursor-position'),
   getScreenInfo: () => ipcRenderer.invoke('get-screen-info'),
   sendFrame: (arrayBuffer) => ipcRenderer.send('new-frame', arrayBuffer),
+  sendRTCToClient: (message) => ipcRenderer.send('rtc-to-client', message),
+  onRTCSignal: (callback) => {
+    ipcRenderer.on('rtc-to-capture', (_, data) => callback(data));
+  },
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (_, data) => callback(data));
   },

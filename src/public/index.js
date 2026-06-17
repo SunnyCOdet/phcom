@@ -66,7 +66,7 @@
     controlModeValue:   $('#control-mode-value'),
   };
 
-  const ctx = dom.canvas.getContext('2d');
+  const ctx = dom.canvas.getContext('2d', { alpha: false, desynchronized: true });
 
   // ─── State ─────────────────────────────────────────────
 
@@ -101,9 +101,17 @@
 
   // Settings (load from localStorage)
   let sensitivity = parseFloat(localStorage.getItem('rd_sensitivity') || '1.5');
-  let quality = parseInt(localStorage.getItem('rd_quality') || '50', 10);
-  let maxFps = parseInt(localStorage.getItem('rd_maxFps') || '15', 10);
+  let quality = parseInt(localStorage.getItem('rd_quality') || '90', 10);
+  let maxFps = parseInt(localStorage.getItem('rd_maxFps') || '60', 10);
   let controlMode = localStorage.getItem('rd_controlMode') || 'touch'; // 'touch' (Direct Touch) or 'trackpad'
+
+  if (localStorage.getItem('rd_stream_defaults_v2') !== '1') {
+    quality = Math.max(quality, 90);
+    maxFps = Math.max(maxFps, 60);
+    localStorage.setItem('rd_quality', quality);
+    localStorage.setItem('rd_maxFps', maxFps);
+    localStorage.setItem('rd_stream_defaults_v2', '1');
+  }
 
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 4;
@@ -138,6 +146,11 @@
   // Pending frame
   let pendingFrame = null;
   let rafScheduled = false;
+  let incomingFrameId = 0;
+  let latestQueuedFrameId = 0;
+  let rtcPeer = null;
+  let rtcVideo = null;
+  let rtcRenderActive = false;
 
   // ─── WebSocket ─────────────────────────────────────────
 
@@ -155,6 +168,8 @@
       reconnectDelay = 1000;
       updateConnectionUI(true);
       startHeartbeat();
+      sendStreamSettings();
+      send({ type: 'rtc-ready' });
       showToast('Connected', 'success');
     };
 
@@ -162,6 +177,7 @@
       isConnected = false;
       updateConnectionUI(false);
       stopHeartbeat();
+      closeRTC();
       scheduleReconnect();
     };
 
@@ -187,6 +203,10 @@
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(obj));
     }
+  }
+
+  function sendStreamSettings() {
+    send({ type: 'settings', quality, maxFps });
   }
 
   function scheduleReconnect() {
@@ -238,6 +258,17 @@
           dom.latencyValue.textContent = latency;
         }
         break;
+      case 'rtc-offer':
+        console.log('[Stream] Received WebRTC offer');
+        handleRTCOffer(msg).catch((err) => {
+          console.error('[RTC] Offer error:', err);
+        });
+        break;
+      case 'rtc-ice':
+        handleRTCICE(msg).catch((err) => {
+          console.error('[RTC] ICE error:', err);
+        });
+        break;
       case 'system-notification':
         showToast(`🔔 ${msg.title}${msg.body ? ' - ' + msg.body : ''}`, 'info');
         
@@ -279,10 +310,190 @@
 
   // ─── Screen Rendering ─────────────────────────────────
 
+  function createRTCVideo() {
+    if (rtcVideo) return rtcVideo;
+
+    rtcVideo = document.createElement('video');
+    rtcVideo.autoplay = true;
+    rtcVideo.muted = true;
+    rtcVideo.playsInline = true;
+    rtcVideo.setAttribute('playsinline', '');
+    rtcVideo.style.position = 'absolute';
+    rtcVideo.style.inset = '0';
+    rtcVideo.style.width = '100%';
+    rtcVideo.style.height = '100%';
+    rtcVideo.style.objectFit = 'contain';
+    rtcVideo.style.opacity = '0';
+    rtcVideo.style.pointerEvents = 'none';
+    dom.screenContainer.appendChild(rtcVideo);
+
+    return rtcVideo;
+  }
+
+  function closeRTC() {
+    rtcRenderActive = false;
+
+    if (rtcPeer) {
+      rtcPeer.close();
+      rtcPeer = null;
+    }
+
+    if (rtcVideo) {
+      rtcVideo.pause();
+      rtcVideo.srcObject = null;
+      rtcVideo.style.opacity = '0';
+    }
+
+    dom.canvas.style.opacity = '';
+  }
+
+  function serializeRTCDescription(description) {
+    return description ? { type: description.type, sdp: description.sdp } : null;
+  }
+
+  function serializeRTCIceCandidate(candidate) {
+    if (!candidate) return null;
+    if (typeof candidate.toJSON === 'function') return candidate.toJSON();
+
+    return {
+      candidate: candidate.candidate,
+      sdpMid: candidate.sdpMid,
+      sdpMLineIndex: candidate.sdpMLineIndex,
+      usernameFragment: candidate.usernameFragment
+    };
+  }
+
+  function ensureRTCPeer() {
+    if (rtcPeer) return rtcPeer;
+
+    rtcPeer = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    });
+    const peer = rtcPeer;
+
+    peer.onicecandidate = (event) => {
+      if (event.candidate) {
+        send({ type: 'rtc-ice', candidate: serializeRTCIceCandidate(event.candidate) });
+      }
+    };
+
+    peer.ontrack = (event) => {
+      const video = createRTCVideo();
+      video.srcObject = event.streams[0];
+      video.play().catch((err) => {
+        console.warn('[RTC] Video play blocked:', err.message);
+      });
+      startRTCRenderLoop();
+    };
+
+    peer.onconnectionstatechange = () => {
+      if (rtcPeer !== peer) return;
+
+      if (peer.connectionState === 'connected') {
+        console.log('[Stream] Using WebRTC stream');
+        send({ type: 'rtc-active' });
+      } else if (['failed', 'closed'].includes(peer.connectionState)) {
+        closeRTC();
+      }
+    };
+
+    return peer;
+  }
+
+  async function handleRTCOffer(msg) {
+    if (!msg.offer || !msg.offer.type || !msg.offer.sdp) {
+      throw new Error('Invalid RTC offer');
+    }
+
+    const peer = ensureRTCPeer();
+    await peer.setRemoteDescription(new RTCSessionDescription(msg.offer));
+    const answer = await peer.createAnswer();
+    await peer.setLocalDescription(answer);
+    send({ type: 'rtc-answer', answer: serializeRTCDescription(peer.localDescription) });
+  }
+
+  async function handleRTCICE(msg) {
+    if (!rtcPeer || !msg.candidate || !msg.candidate.candidate) return;
+    await rtcPeer.addIceCandidate(new RTCIceCandidate(msg.candidate));
+  }
+
+  function startRTCRenderLoop() {
+    if (rtcRenderActive) return;
+    rtcRenderActive = true;
+
+    const renderVideoFrame = () => {
+      if (!rtcRenderActive || !rtcVideo || rtcVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        scheduleRTCFrame(renderVideoFrame);
+        return;
+      }
+
+      const width = rtcVideo.videoWidth;
+      const height = rtcVideo.videoHeight;
+      if (width > 0 && height > 0) {
+        if (!dom.noSignal.classList.contains('hidden')) {
+          dom.noSignal.classList.add('hidden');
+        }
+
+        if (dom.canvas.width !== width || dom.canvas.height !== height) {
+          dom.canvas.width = width;
+          dom.canvas.height = height;
+        }
+
+        rtcVideo.style.opacity = '1';
+        dom.canvas.style.opacity = '0';
+        updateClientFps();
+      }
+
+      scheduleRTCFrame(renderVideoFrame);
+    };
+
+    scheduleRTCFrame(renderVideoFrame);
+  }
+
+  function scheduleRTCFrame(callback) {
+    if (!rtcRenderActive) return;
+
+    if (rtcVideo && typeof rtcVideo.requestVideoFrameCallback === 'function') {
+      rtcVideo.requestVideoFrameCallback(callback);
+    } else {
+      requestAnimationFrame(callback);
+    }
+  }
+
+  function updateClientFps() {
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsUpdate >= 1000) {
+      currentFps = frameCount;
+      frameCount = 0;
+      lastFpsUpdate = now;
+      dom.fpsValue.textContent = currentFps;
+    }
+  }
+
   function handleFrame(buffer) {
+    if (!handleFrame.hasLoggedFallback) {
+      console.log('[Stream] Using JPEG fallback stream');
+      handleFrame.hasLoggedFallback = true;
+    }
+
+    dom.canvas.style.opacity = '';
+    if (rtcVideo) rtcVideo.style.opacity = '0';
+
+    const frameId = ++incomingFrameId;
     const blob = new Blob([buffer], { type: 'image/jpeg' });
 
     createImageBitmap(blob).then((bitmap) => {
+      if (frameId < latestQueuedFrameId) {
+        bitmap.close();
+        return;
+      }
+
+      if (pendingFrame) {
+        pendingFrame.close();
+      }
+
+      latestQueuedFrameId = frameId;
       pendingFrame = bitmap;
       if (!rafScheduled) {
         rafScheduled = true;
@@ -315,15 +526,7 @@
     ctx.drawImage(bitmap, 0, 0);
     bitmap.close();
 
-    // Track FPS
-    frameCount++;
-    const now = performance.now();
-    if (now - lastFpsUpdate >= 1000) {
-      currentFps = frameCount;
-      frameCount = 0;
-      lastFpsUpdate = now;
-      dom.fpsValue.textContent = currentFps;
-    }
+    updateClientFps();
   }
 
   function resizeCanvas() {
@@ -1203,14 +1406,14 @@
       quality = parseInt(dom.qualitySlider.value, 10);
       dom.qualityValue.textContent = quality;
       localStorage.setItem('rd_quality', quality);
-      send({ type: 'settings', quality });
+      sendStreamSettings();
     });
 
     dom.fpsSlider.addEventListener('input', () => {
       maxFps = parseInt(dom.fpsSlider.value, 10);
       dom.fpsSettingValue.textContent = maxFps;
       localStorage.setItem('rd_maxFps', maxFps);
-      send({ type: 'settings', maxFps });
+      sendStreamSettings();
     });
 
     dom.sensitivitySlider.addEventListener('input', () => {

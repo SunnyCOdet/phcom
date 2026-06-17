@@ -16,6 +16,30 @@ let server = null;
 let wss = null;
 let heartbeatInterval = null;
 const clients = new Set();
+const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+let nextClientId = 1;
+let captureSignalHandler = null;
+
+function setCaptureSignalHandler(handler) {
+  captureSignalHandler = handler;
+}
+
+function sendRTCToCapture(message) {
+  if (captureSignalHandler) {
+    captureSignalHandler(message);
+  }
+}
+
+function sendRTCToClient(clientId, message) {
+  const client = [...clients].find((ws) => ws.clientId === clientId);
+  if (client) {
+    sendJSON(client, message);
+  }
+}
+
+function getClientIds() {
+  return [...clients].map((ws) => ws.clientId).filter(Boolean);
+}
 
 /**
  * Create and configure the Express app.
@@ -113,15 +137,18 @@ function createApp() {
 }
 
 /**
- * Broadcast a binary WebP frame to all connected WebSocket clients.
- * @param {Buffer} buffer - WebP image buffer
+ * Broadcast a binary JPEG frame to all connected WebSocket clients.
+ * @param {Buffer} buffer - JPEG image buffer
  */
 function broadcastFrame(buffer) {
   for (const client of clients) {
     if (client.readyState === 1) { // WebSocket.OPEN
-      // BACKPRESSURE FIX: Drop frame if the network is too slow to prevent crashing
-      // If there's more than 512KB buffered, the Wi-Fi is struggling. Drop this frame.
-      if (client.bufferedAmount > 512 * 1024) {
+      if (!client.useJpegFallback) {
+        continue;
+      }
+
+      const maxBufferedBytes = Math.max(MAX_BUFFERED_BYTES, buffer.length * 2);
+      if (client.bufferedAmount > maxBufferedBytes) {
         continue;
       }
 
@@ -195,6 +222,30 @@ async function handleWSMessage(msg, ws) {
         sendJSON(ws, { type: 'media-result', ...mediaResult });
         break;
 
+      case 'settings': {
+        const settings = screenCapture.updateSettings(msg);
+        sendJSON(ws, { type: 'settings', settings });
+        break;
+      }
+
+      case 'rtc-ready':
+      case 'rtc-answer':
+      case 'rtc-ice':
+        sendRTCToCapture({ ...msg, clientId: ws.clientId });
+        break;
+
+      case 'rtc-active':
+        console.log(`[server] Client ${ws.clientId} using WebRTC stream`);
+        ws.useJpegFallback = false;
+        sendRTCToCapture({ type: 'rtc-active', clientId: ws.clientId });
+        break;
+
+      case 'rtc-fallback':
+        console.log(`[server] Client ${ws.clientId} using JPEG fallback stream`);
+        ws.useJpegFallback = true;
+        sendRTCToCapture({ type: 'rtc-fallback', clientId: ws.clientId });
+        break;
+
       case 'getclipboard': {
         try {
           const text = await clipboard.getClipboard();
@@ -246,6 +297,8 @@ function setupWebSocket() {
   wss.on('connection', (ws, req) => {
     const clientIP = req.socket.remoteAddress;
     console.log(`[server] WebSocket client connected: ${clientIP}`);
+    ws.clientId = `client-${Date.now()}-${nextClientId++}`;
+    ws.useJpegFallback = false;
 
     // Add to clients set
     clients.add(ws);
@@ -253,13 +306,19 @@ function setupWebSocket() {
 
     // Mark as alive for heartbeat
     ws.isAlive = true;
+    if (ws._socket && typeof ws._socket.setNoDelay === 'function') {
+      ws._socket.setNoDelay(true);
+    }
 
     // Send welcome message
     sendJSON(ws, {
       type: 'welcome',
       message: 'Connected to Magical Newton Remote Desktop',
+      clientId: ws.clientId,
       clients: clients.size,
     });
+
+    sendRTCToCapture({ type: 'rtc-client-connected', clientId: ws.clientId });
 
     // Handle incoming messages
     ws.on('message', (data) => {
@@ -289,6 +348,7 @@ function setupWebSocket() {
       console.log(`[server] WebSocket client disconnected: ${clientIP} (code: ${code})`);
       clients.delete(ws);
       screenCapture.setClientCount(clients.size);
+      sendRTCToCapture({ type: 'rtc-client-disconnected', clientId: ws.clientId });
     });
 
     // Handle errors
@@ -296,6 +356,7 @@ function setupWebSocket() {
       console.error(`[server] WebSocket client error: ${err.message}`);
       clients.delete(ws);
       screenCapture.setClientCount(clients.size);
+      sendRTCToCapture({ type: 'rtc-client-disconnected', clientId: ws.clientId });
     });
   });
 
@@ -328,6 +389,7 @@ function startHeartbeat() {
         console.log('[server] Terminating unresponsive client');
         clients.delete(ws);
         screenCapture.setClientCount(clients.size);
+        sendRTCToCapture({ type: 'rtc-client-disconnected', clientId: ws.clientId });
         ws.terminate();
         continue;
       }
@@ -339,6 +401,7 @@ function startHeartbeat() {
         // Client already gone
         clients.delete(ws);
         screenCapture.setClientCount(clients.size);
+        sendRTCToCapture({ type: 'rtc-client-disconnected', clientId: ws.clientId });
       }
     }
   }, 10000); // Every 10 seconds
@@ -353,6 +416,7 @@ function getStatus() {
   return {
     status: 'ok',
     clients: clients.size,
+    clientIds: getClientIds(),
     fps: stats.fps,
     capture: stats,
   };
@@ -372,7 +436,7 @@ function startServer(port = 7898) {
       server = http.createServer(app);
 
       // Create WebSocket server attached to HTTP server
-      wss = new WebSocketServer({ server });
+      wss = new WebSocketServer({ server, perMessageDeflate: false });
       setupWebSocket();
 
       // Start heartbeat
@@ -475,4 +539,6 @@ module.exports = {
   startServer,
   stopServer,
   getStatus,
+  sendRTCToClient,
+  setCaptureSignalHandler,
 };
