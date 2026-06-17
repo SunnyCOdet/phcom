@@ -286,6 +286,10 @@ async function handleWSMessage(msg, ws) {
         break;
       }
 
+      case 'ping':
+        sendJSON(ws, { type: 'pong', timestamp: msg.timestamp });
+        break;
+
       default:
         console.warn(`[server] Unknown message type: ${msg.type}`);
         break;

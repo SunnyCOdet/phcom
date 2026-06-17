@@ -451,6 +451,8 @@
     let captureWidth = 1920;
     let captureHeight = 1080;
     const rtcPeers = new Map();
+    // Track which clients need JPEG fallback vs WebRTC
+    const jpegFallbackClientIds = new Set();
     let captureSettings = {
       quality: 95,
       maxFps: 60,
@@ -458,6 +460,14 @@
       maxHeight: 2160
     };
     console.log('[Capture] Initial capture settings:', JSON.stringify(captureSettings));
+
+    // Helper: forward renderer logs to main process console
+    function log(msg) {
+      console.log(msg);
+      if (window.electronAPI && window.electronAPI.sendLog) {
+        window.electronAPI.sendLog(msg);
+      }
+    }
 
     function clamp(value, min, max) {
       return Math.max(min, Math.min(value, max));
@@ -527,8 +537,8 @@
       console.log('[RTC] Applying sender quality - track kind:', sender.track.kind, 'enabled:', sender.track.enabled);
 
       const params = sender.getParameters();
-      // Maintain resolution at all costs - never downscale (Discord approach)
-      params.degradationPreference = 'maintain-resolution';
+      // Maintain resolution but allow balanced FPS tradeoff
+      params.degradationPreference = 'balanced';
       params.encodings = params.encodings && params.encodings.length > 0 ? params.encodings : [{}];
       
       const maxBitrate = getRTCMaxBitrate();
@@ -589,6 +599,7 @@
     function closeRTCPeer(clientId) {
       const peer = rtcPeers.get(clientId);
       if (!peer) return;
+      stopRTCStatsReporting(clientId);
       peer.close();
       rtcPeers.delete(clientId);
     }
@@ -600,7 +611,7 @@
     }
 
     function createRTCPeer(clientId) {
-      console.log('[RTC] Creating peer for client:', clientId);
+      log('[RTC] Creating peer for client: ' + clientId);
       closeRTCPeer(clientId);
 
       const peer = new RTCPeerConnection({
@@ -609,38 +620,18 @@
 
       peer.onicecandidate = (event) => {
         if (event.candidate) {
-          console.log('[RTC] ICE candidate for', clientId, ':', event.candidate.type, event.candidate.protocol);
           sendRTCToClient({ type: 'rtc-ice', clientId, candidate: serializeRTCIceCandidate(event.candidate) });
         }
       };
 
       peer.onconnectionstatechange = () => {
-        console.log('[RTC] Peer', clientId, 'connection state:', peer.connectionState);
+        log('[RTC] Peer ' + clientId + ' connection state: ' + peer.connectionState);
         if (['failed', 'closed'].includes(peer.connectionState)) {
-          console.warn('[RTC] Peer', clientId, 'connection', peer.connectionState);
           closeRTCPeer(clientId);
         } else if (peer.connectionState === 'connected') {
-          console.log('[RTC] ✅ Peer', clientId, 'CONNECTED - streaming at', captureWidth + 'x' + captureHeight);
-          // Log codec info from stats
-          peer.getStats().then((stats) => {
-            stats.forEach((report) => {
-              if (report.type === 'outbound-rtp' && report.kind === 'video') {
-                console.log('[RTC] Outbound video stats:', JSON.stringify({
-                  codec: report.codecId,
-                  bytesSent: report.bytesSent,
-                  framesSent: report.framesSent,
-                  framesEncoded: report.framesEncoded,
-                  frameWidth: report.frameWidth,
-                  frameHeight: report.frameHeight,
-                  framesPerSecond: report.framesPerSecond,
-                  qualityLimitationReason: report.qualityLimitationReason,
-                }));
-              }
-              if (report.type === 'codec' && report.mimeType && report.mimeType.includes('video')) {
-                console.log('[RTC] Video codec:', report.mimeType, 'payloadType:', report.payloadType);
-              }
-            });
-          }).catch(() => {});
+          log('[RTC] \u2705 Peer ' + clientId + ' CONNECTED - streaming at ' + captureWidth + 'x' + captureHeight);
+          // Start periodic stats reporting for this peer
+          startRTCStatsReporting(clientId, peer);
         }
       };
 
@@ -648,25 +639,75 @@
         console.warn('[RTC] ICE error for', clientId, ':', event.errorCode, event.errorText);
       };
 
-      peer.oniceconnectionstatechange = () => {
-        console.log('[RTC] ICE state for', clientId, ':', peer.iceConnectionState);
-      };
-
       if (streamInstance) {
-        console.log('[RTC] Adding', streamInstance.getVideoTracks().length, 'video track(s) to peer', clientId);
+        log('[RTC] Adding ' + streamInstance.getVideoTracks().length + ' video track(s) to peer ' + clientId);
         streamInstance.getVideoTracks().forEach((track) => {
           track.contentHint = 'detail';
-          console.log('[RTC] Adding track:', track.id, 'kind:', track.kind, 'settings:', JSON.stringify(track.getSettings()));
           const sender = peer.addTrack(track, streamInstance);
           applyRTCSenderQuality(sender);
         });
       } else {
-        console.warn('[RTC] No stream instance available for peer', clientId);
+        log('[RTC] WARNING: No stream instance available for peer ' + clientId);
       }
 
       rtcPeers.set(clientId, peer);
-      console.log('[RTC] Total active peers:', rtcPeers.size);
       return peer;
+    }
+
+    // Periodic WebRTC stats reporting — logs to main console every 5s
+    const rtcStatsIntervals = new Map();
+
+    function startRTCStatsReporting(clientId, peer) {
+      // Clear any existing interval for this client
+      if (rtcStatsIntervals.has(clientId)) {
+        clearInterval(rtcStatsIntervals.get(clientId));
+      }
+
+      const intervalId = setInterval(async () => {
+        if (!peer || peer.connectionState !== 'connected') {
+          clearInterval(intervalId);
+          rtcStatsIntervals.delete(clientId);
+          return;
+        }
+
+        try {
+          const stats = await peer.getStats();
+          let videoStats = null;
+          let codecInfo = null;
+
+          stats.forEach((report) => {
+            if (report.type === 'outbound-rtp' && report.kind === 'video') {
+              videoStats = report;
+            }
+            if (report.type === 'codec' && report.mimeType && report.mimeType.includes('video')) {
+              codecInfo = report;
+            }
+          });
+
+          if (videoStats) {
+            const fps = videoStats.framesPerSecond || 0;
+            const width = videoStats.frameWidth || 0;
+            const height = videoStats.frameHeight || 0;
+            const bytesSent = videoStats.bytesSent || 0;
+            const framesEncoded = videoStats.framesEncoded || 0;
+            const qLimit = videoStats.qualityLimitationReason || 'none';
+            const codec = codecInfo ? codecInfo.mimeType : 'unknown';
+
+            log('[WebRTC Stats] ' + clientId + ': ' + fps + ' FPS | ' + width + 'x' + height + ' | Codec: ' + codec + ' | Sent: ' + (bytesSent / 1024 / 1024).toFixed(1) + ' MB | Encoded: ' + framesEncoded + ' frames | Quality limit: ' + qLimit);
+          }
+        } catch (err) {
+          // Stats collection failed, ignore
+        }
+      }, 5000);
+
+      rtcStatsIntervals.set(clientId, intervalId);
+    }
+
+    function stopRTCStatsReporting(clientId) {
+      if (rtcStatsIntervals.has(clientId)) {
+        clearInterval(rtcStatsIntervals.get(clientId));
+        rtcStatsIntervals.delete(clientId);
+      }
     }
 
     // Prefer VP9 or H264 High profile for better screen share quality (like Discord)
@@ -736,9 +777,23 @@
       switch (message.type) {
         case 'rtc-client-connected':
         case 'rtc-ready':
-          console.log('[RTC] Client', message.clientId, 'ready, starting WebRTC stream...');
+          // New client — assume it needs JPEG until WebRTC is confirmed
+          jpegFallbackClientIds.add(message.clientId);
+          console.log('[RTC] Client', message.clientId, 'ready, needs JPEG fallback until WebRTC connects. JPEG clients:', jpegFallbackClientIds.size);
+          ensureJpegTimerRunning();
           await startRTCForClient(message.clientId);
           break;
+
+        case 'rtc-active':
+          // Client confirmed WebRTC is working — stop sending JPEG to it
+          jpegFallbackClientIds.delete(message.clientId);
+          console.log('[RTC] ✅ Client', message.clientId, 'switched to WebRTC. JPEG clients remaining:', jpegFallbackClientIds.size);
+          if (jpegFallbackClientIds.size === 0) {
+            console.log('[Capture] 🚀 All clients on WebRTC — stopping JPEG encoding to free CPU');
+            stopJpegTimer();
+          }
+          break;
+
         case 'rtc-answer': {
           const peer = rtcPeers.get(message.clientId);
           if (peer && message.answer && message.answer.type && message.answer.sdp) {
@@ -760,15 +815,37 @@
         }
         case 'rtc-client-disconnected':
           console.log('[RTC] Client', message.clientId, 'disconnected');
+          jpegFallbackClientIds.delete(message.clientId);
           closeRTCPeer(message.clientId);
+          if (jpegFallbackClientIds.size === 0 && rtcPeers.size === 0) {
+            console.log('[Capture] No clients left, JPEG timer not needed');
+            stopJpegTimer();
+          }
           break;
         case 'rtc-fallback':
-          console.log('[RTC] ⚠️ Client', message.clientId, 'switched to JPEG fallback (lower quality)');
+          console.log('[RTC] ⚠️ Client', message.clientId, 'fell back to JPEG fallback');
+          jpegFallbackClientIds.add(message.clientId);
           closeRTCPeer(message.clientId);
+          ensureJpegTimerRunning();
           break;
         default:
           console.log('[RTC] Unhandled signal type:', message.type);
           break;
+      }
+    }
+
+    /** Start the JPEG capture timer if not already running */
+    function ensureJpegTimerRunning() {
+      if (isCapturing && window.electronAPI) {
+        console.log('[Capture] Starting JPEG capture timer at', targetFps, 'FPS for', jpegFallbackClientIds.size, 'JPEG client(s)');
+        window.electronAPI.startCaptureTimer(targetFps);
+      }
+    }
+
+    /** Stop the JPEG capture timer (WebRTC streams continue independently) */
+    function stopJpegTimer() {
+      if (window.electronAPI) {
+        window.electronAPI.stopCaptureTimer();
       }
     }
 
@@ -788,6 +865,8 @@
 
     async function captureNextFrame() {
       if (!isCapturing || !videoElement || videoElement.paused || videoElement.ended) return;
+      // Skip JPEG encoding entirely if no clients need it (all on WebRTC)
+      if (jpegFallbackClientIds.size === 0) return;
       isEncoding = true;
 
       const frameStart = performance.now();
@@ -878,20 +957,20 @@
               maxWidth: captureWidth,
               minHeight: captureHeight,
               maxHeight: captureHeight,
+              minFrameRate: 30,
               maxFrameRate: captureSettings.maxFps
             }
           }
         };
-        console.log('[Capture] getUserMedia constraints:', JSON.stringify(constraints));
+        log('[Capture] getUserMedia constraints: ' + JSON.stringify(constraints));
 
         streamInstance = await navigator.mediaDevices.getUserMedia(constraints);
-        console.log('[Capture] Got media stream, tracks:', streamInstance.getTracks().length);
+        log('[Capture] Got media stream, tracks: ' + streamInstance.getTracks().length);
 
         streamInstance.getVideoTracks().forEach((track) => {
           track.contentHint = 'detail';
           const settings = track.getSettings();
-          console.log('[Capture] Video track settings:', JSON.stringify(settings));
-          console.log('[Capture] Video track constraints:', JSON.stringify(track.getConstraints()));
+          log('[Capture] Video track settings: ' + JSON.stringify(settings));
         });
 
         videoElement = document.createElement('video');
@@ -913,12 +992,12 @@
           const settings = track.getSettings();
           targetFps = Math.min(captureSettings.maxFps, settings.frameRate || captureSettings.maxFps);
           
-          console.log('[Capture] ✅ Capture started successfully:');
-          console.log('[Capture]   Resolution: ' + captureWidth + 'x' + captureHeight);
-          console.log('[Capture]   FPS: ' + targetFps);
-          console.log('[Capture]   WebRTC bitrate: ' + Math.round(getRTCMaxBitrate() / 1000000) + ' Mbps');
-          console.log('[Capture]   JPEG quality: ' + (captureSettings.quality / 100));
-          console.log('[Capture]   Actual track settings:', JSON.stringify(settings));
+          log('[Capture] \u2705 Capture started successfully:');
+          log('[Capture]   Resolution: ' + captureWidth + 'x' + captureHeight);
+          log('[Capture]   Actual track FPS: ' + (settings.frameRate || 'unknown'));
+          log('[Capture]   Target FPS: ' + targetFps);
+          log('[Capture]   WebRTC bitrate: ' + Math.round(getRTCMaxBitrate() / 1000000) + ' Mbps');
+          log('[Capture]   Track settings: ' + JSON.stringify(settings));
           
           if (window.electronAPI) {
             window.electronAPI.startCaptureTimer(targetFps);
@@ -936,10 +1015,12 @@
     }
 
     function stopScreenCapture() {
+      if (!isCapturing && !streamInstance) return; // Already stopped
       console.log('[Capture] Stopping screen capture...');
       console.log('[Capture] Active RTC peers:', rtcPeers.size);
       isCapturing = false;
       isEncoding = false;
+      jpegFallbackClientIds.clear();
       if (window.electronAPI) {
         window.electronAPI.stopCaptureTimer();
       }

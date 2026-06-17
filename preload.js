@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   startCaptureTimer: (fps) => ipcRenderer.send('start-capture-timer', fps),
   stopCaptureTimer: () => ipcRenderer.send('stop-capture-timer'),
+  sendLog: (msg) => ipcRenderer.send('renderer-log', msg),
   onCaptureTick: (callback) => {
     ipcRenderer.on('capture-tick', () => callback());
   }

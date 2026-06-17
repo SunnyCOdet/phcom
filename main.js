@@ -145,6 +145,11 @@ function setupIPC() {
 
   console.log('[main] Setting up IPC handlers...');
 
+  // Forward renderer logs to main process console
+  ipcMain.on('renderer-log', (event, msg) => {
+    console.log(msg);
+  });
+
   ipcMain.on('start-capture-timer', (event, fps) => {
     if (captureInterval) clearInterval(captureInterval);
     const safeFps = Math.max(5, Math.min(Number(fps) || 60, 60));
