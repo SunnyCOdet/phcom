@@ -10,6 +10,7 @@ const appLauncher = require('./app-launcher');
 const fileUpload = require('./file-upload');
 const mediaKeys = require('./media-keys');
 const notifications = require('./notifications');
+const auth = require('./auth');
 
 // Server state
 let server = null;
@@ -50,14 +51,47 @@ function createApp() {
   // Parse JSON request bodies
   app.use(express.json());
 
-  // Serve static files from src/public
+  // --- Auth endpoints (public — no token required) ---
+
+  // POST /api/auth/register — create an account and receive a session token
+  app.post('/api/auth/register', (req, res) => {
+    const { username, password } = req.body || {};
+    const result = auth.register(username, password);
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  // POST /api/auth/login — exchange credentials for a session token
+  app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body || {};
+    const result = auth.login(username, password);
+    res.status(result.ok ? 200 : 401).json(result);
+  });
+
+  // POST /api/auth/logout — invalidate the current token
+  app.post('/api/auth/logout', (req, res) => {
+    auth.logout(auth.extractToken(req));
+    res.json({ ok: true });
+  });
+
+  // GET /api/auth/me — validate token and return the current user
+  app.get('/api/auth/me', auth.requireAuth, (req, res) => {
+    res.json({ ok: true, username: req.username });
+  });
+
+  // GET /api/auth/config — public registration state (for the login UI)
+  app.get('/api/auth/config', (req, res) => {
+    res.json({ registrationOpen: auth.isRegistrationOpen() });
+  });
+
+  // Serve static files from src/public (login + app UI are public assets;
+  // the data endpoints and WebSocket below enforce auth).
   const publicDir = path.join(__dirname, '..', 'public');
   app.use(express.static(publicDir));
 
-  // --- REST API Endpoints ---
+  // --- REST API Endpoints (all require a valid session token) ---
 
   // GET /api/status — server status + metrics
-  app.get('/api/status', (req, res) => {
+  app.get('/api/status', auth.requireAuth, (req, res) => {
     try {
       const stats = screenCapture.getStats();
       res.json({
@@ -73,7 +107,7 @@ function createApp() {
   });
 
   // GET /api/apps — list available apps
-  app.get('/api/apps', (req, res) => {
+  app.get('/api/apps', auth.requireAuth, (req, res) => {
     try {
       const apps = appLauncher.getApps();
       res.json({ success: true, apps });
@@ -84,7 +118,7 @@ function createApp() {
   });
 
   // POST /api/launch — launch an application
-  app.post('/api/launch', async (req, res) => {
+  app.post('/api/launch', auth.requireAuth, async (req, res) => {
     try {
       const { name } = req.body || {};
       if (!name) {
@@ -99,7 +133,7 @@ function createApp() {
   });
 
   // GET /api/clipboard — get clipboard text
-  app.get('/api/clipboard', async (req, res) => {
+  app.get('/api/clipboard', auth.requireAuth, async (req, res) => {
     try {
       const text = await clipboard.getClipboard();
       res.json({ success: true, text });
@@ -110,7 +144,7 @@ function createApp() {
   });
 
   // POST /api/clipboard — set clipboard text
-  app.post('/api/clipboard', async (req, res) => {
+  app.post('/api/clipboard', auth.requireAuth, async (req, res) => {
     try {
       const { text } = req.body || {};
       if (typeof text !== 'string') {
@@ -125,7 +159,7 @@ function createApp() {
   });
 
   // POST /api/upload — file upload
-  app.post('/api/upload', fileUpload.upload.single('file'), fileUpload.handleUpload);
+  app.post('/api/upload', auth.requireAuth, fileUpload.upload.single('file'), fileUpload.handleUpload);
 
   // Error handling middleware
   app.use((err, req, res, next) => {
@@ -320,7 +354,24 @@ function sendJSON(ws, data) {
 function setupWebSocket() {
   wss.on('connection', (ws, req) => {
     const clientIP = req.socket.remoteAddress;
-    console.log(`[server] WebSocket client connected: ${clientIP}`);
+
+    // Require a valid session token (passed as ?token=... on the WS URL).
+    // Reject unauthenticated upgrades before doing anything else.
+    let token = null;
+    try {
+      token = new URL(req.url, 'http://localhost').searchParams.get('token');
+    } catch (err) {
+      token = null;
+    }
+    const username = auth.verifyToken(token);
+    if (!username) {
+      console.warn(`[server] Rejected unauthenticated WebSocket from ${clientIP}`);
+      try { ws.close(4401, 'unauthorized'); } catch (e) {}
+      return;
+    }
+    ws.username = username;
+
+    console.log(`[server] WebSocket client connected: ${clientIP} (user: ${username})`);
     ws.clientId = `client-${Date.now()}-${nextClientId++}`;
     console.log(`[server] Assigned clientId: ${ws.clientId} to ${clientIP}`);
     ws.useJpegFallback = false;
@@ -456,6 +507,9 @@ function getStatus() {
 function startServer(port = 7898) {
   return new Promise((resolve, reject) => {
     try {
+      // Initialize authentication store (users + sessions)
+      auth.init();
+
       const app = createApp();
 
       // Create HTTP server

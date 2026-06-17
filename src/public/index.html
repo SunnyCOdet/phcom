@@ -18,6 +18,26 @@
 </head>
 <body>
 
+  <!-- Login / Register Overlay -->
+  <div id="auth-overlay" class="auth-overlay" hidden>
+    <div class="auth-card">
+      <div class="auth-brand">pcphone</div>
+      <div class="auth-subtitle" id="auth-subtitle">Sign in to control this PC</div>
+      <form id="auth-form" autocomplete="off">
+        <input id="auth-username" class="auth-input" type="text" placeholder="Username"
+               autocapitalize="none" autocorrect="off" spellcheck="false" required>
+        <input id="auth-password" class="auth-input" type="password" placeholder="Password"
+               autocomplete="current-password" required>
+        <div id="auth-error" class="auth-error" hidden></div>
+        <button id="auth-submit" class="auth-submit" type="submit">Sign In</button>
+      </form>
+      <div class="auth-toggle">
+        <span id="auth-toggle-text">No account?</span>
+        <button id="auth-toggle-btn" type="button" class="auth-link">Create one</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Status Bar -->
   <div id="status-bar">
     <div class="status-left">

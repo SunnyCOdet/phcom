@@ -1,6 +1,6 @@
 {
   "name": "pcphone",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "pcphone — control your PC from any phone over the web",
   "main": "main.js",
   "scripts": {
@@ -16,7 +16,7 @@
     "name": "sunny",
     "email": "egnanadeep@gmail.com"
   },
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "build": {
     "appId": "com.sunny.pcphone",
     "productName": "pcphone",

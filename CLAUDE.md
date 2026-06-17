@@ -68,7 +68,18 @@ phone client  <--WebSocket-->  Node server  <--IPC-->  main.js  <--IPC-->  captu
 - `network.js` — local IP detection (prefers Wi-Fi, skips virtual/WSL adapters), QR generation, mDNS advertisement (`my-pc.local` via bonjour), and `localtunnel` for remote access. Loads a root `.env` if present.
 
 ### REST API (Express)
-`/api/status`, `/api/apps`, `/api/launch`, `/api/clipboard` (GET/POST), `/api/upload`. These duplicate some WebSocket capabilities for non-realtime use.
+`/api/status`, `/api/apps`, `/api/launch`, `/api/clipboard` (GET/POST), `/api/upload`. These duplicate some WebSocket capabilities for non-realtime use. All require auth (below).
+
+### Authentication (`src/server/auth.js`)
+Every control path requires a session token:
+- **Public** endpoints: `/api/auth/{register,login,logout,me,config}` and the static UI assets.
+- **Protected** REST endpoints take `auth.requireAuth` middleware (reads `Authorization: Bearer <token>`).
+- **WebSocket** is gated in `setupWebSocket`: the token is passed as `?token=...` on the WS URL; an invalid/missing token is closed with code **4401** before the client is added.
+- **Open self-registration** is the chosen model — anyone reachable can register. `auth.setRegistrationOpen(false)` locks it. Passwords are scrypt-hashed (Node `crypto`, no native dep); users + sessions persist to `pcphone-auth.json` in Electron's `userData` dir; sessions last 30 days.
+- Client side (`src/public/index.js`): a login/register overlay gates the app; the token is stored in `localStorage` (`pcphone_token`), attached to the WS URL, sent via the `apiFetch` wrapper (and the upload XHR), and a 401/4401 re-shows the login screen.
+
+### License
+Source-available, **not** OSI open source. `LICENSE` (pcphone Non-Commercial License) permits non-commercial use only; commercial rights are reserved exclusively to the Licensor. `package.json` license field is `SEE LICENSE IN LICENSE`.
 
 ## Conventions & gotchas
 - The IPC bridge is `src/electron/../preload.js` → `window.electronAPI`. Any new main↔renderer channel must be added in **both** `preload.js` and the corresponding `ipcMain` handler in `main.js`.

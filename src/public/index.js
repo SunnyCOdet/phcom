@@ -68,6 +68,16 @@
     btnAudioUnmute:     $('#btn-audio-unmute'),
     btnAudioMute:       $('#btn-audio-mute'),
     audioStatusValue:   $('#audio-status-value'),
+    // Auth
+    authOverlay:    $('#auth-overlay'),
+    authForm:       $('#auth-form'),
+    authUsername:   $('#auth-username'),
+    authPassword:   $('#auth-password'),
+    authError:      $('#auth-error'),
+    authSubmit:     $('#auth-submit'),
+    authSubtitle:   $('#auth-subtitle'),
+    authToggleText: $('#auth-toggle-text'),
+    authToggleBtn:  $('#auth-toggle-btn'),
   };
 
   const ctx = dom.canvas.getContext('2d', { alpha: false, desynchronized: true });
@@ -79,6 +89,10 @@
   let reconnectTimer = null;
   let heartbeatTimer = null;
   let isConnected = false;
+
+  // Auth
+  let authToken = localStorage.getItem('pcphone_token') || null;
+  let authMode = 'login'; // 'login' | 'register'
 
   // FPS tracking
   let frameCount = 0;
@@ -157,15 +171,130 @@
   let rtcVideo = null;
   let rtcRenderActive = false;
 
+  // ─── Authentication ────────────────────────────────────
+
+  function setToken(token) {
+    authToken = token || null;
+    if (token) localStorage.setItem('pcphone_token', token);
+    else localStorage.removeItem('pcphone_token');
+  }
+
+  function showAuth(message) {
+    if (message) {
+      dom.authError.textContent = message;
+      dom.authError.hidden = false;
+    } else {
+      dom.authError.hidden = true;
+    }
+    dom.authOverlay.hidden = false;
+  }
+
+  function hideAuth() {
+    dom.authOverlay.hidden = true;
+    dom.authError.hidden = true;
+  }
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    if (mode === 'register') {
+      dom.authSubtitle.textContent = 'Create an account';
+      dom.authSubmit.textContent = 'Create Account';
+      dom.authPassword.setAttribute('autocomplete', 'new-password');
+      dom.authToggleText.textContent = 'Have an account?';
+      dom.authToggleBtn.textContent = 'Sign in';
+    } else {
+      dom.authSubtitle.textContent = 'Sign in to control this PC';
+      dom.authSubmit.textContent = 'Sign In';
+      dom.authPassword.setAttribute('autocomplete', 'current-password');
+      dom.authToggleText.textContent = 'No account?';
+      dom.authToggleBtn.textContent = 'Create one';
+    }
+    dom.authError.hidden = true;
+  }
+
+  // Force re-authentication: drop token, close socket, show the login screen.
+  function requireLogin(message) {
+    setToken(null);
+    if (ws) { try { ws.close(); } catch (e) {} }
+    setAuthMode('login');
+    showAuth(message);
+  }
+
+  async function submitAuth(e) {
+    if (e) e.preventDefault();
+    const username = dom.authUsername.value.trim();
+    const password = dom.authPassword.value;
+    if (!username || !password) {
+      showAuth('Enter a username and password');
+      return;
+    }
+    dom.authSubmit.disabled = true;
+    const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.token) {
+        setToken(data.token);
+        dom.authPassword.value = '';
+        hideAuth();
+        showToast(authMode === 'register' ? 'Account created' : 'Signed in', 'success');
+        connect();
+      } else {
+        showAuth(data.message || 'Authentication failed');
+      }
+    } catch (err) {
+      showAuth('Network error — is the PC reachable?');
+    } finally {
+      dom.authSubmit.disabled = false;
+    }
+  }
+
+  function initAuth() {
+    dom.authForm.addEventListener('submit', submitAuth);
+    dom.authToggleBtn.addEventListener('click', () => {
+      setAuthMode(authMode === 'login' ? 'register' : 'login');
+    });
+  }
+
+  // Validate a stored token against the server.
+  async function verifyExistingToken() {
+    if (!authToken) return false;
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: { 'Authorization': 'Bearer ' + authToken },
+      });
+      return res.ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // fetch wrapper that attaches the auth token and handles 401 by re-prompting.
+  async function apiFetch(url, opts = {}) {
+    const headers = Object.assign({}, opts.headers || {});
+    if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+    const res = await fetch(url, Object.assign({}, opts, { headers }));
+    if (res.status === 401) {
+      requireLogin('Session expired — please sign in again');
+    }
+    return res;
+  }
+
   // ─── WebSocket ─────────────────────────────────────────
 
   function connect() {
+    if (!authToken) { requireLogin(); return; }
     if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
       return;
     }
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${location.host}`);
+    const tokenQuery = '?token=' + encodeURIComponent(authToken);
+    ws = new WebSocket(`${protocol}//${location.host}/${tokenQuery}`);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
@@ -187,6 +316,11 @@
       updateConnectionUI(false);
       stopHeartbeat();
       closeRTC();
+      // 4401 = server rejected the token. Re-prompt instead of reconnecting.
+      if (event.code === 4401) {
+        requireLogin('Session expired — please sign in again');
+        return;
+      }
       scheduleReconnect();
     };
 
@@ -1291,7 +1425,7 @@
     dom.appsGrid.innerHTML = '<div class="apps-loading">Loading apps…</div>';
 
     try {
-      const res = await fetch('/api/apps');
+      const res = await apiFetch('/api/apps');
       if (!res.ok) throw new Error('Failed to fetch apps');
       const data = await res.json();
       const apps = data.apps || data;
@@ -1320,7 +1454,7 @@
 
   async function launchApp(name) {
     try {
-      const res = await fetch('/api/launch', {
+      const res = await apiFetch('/api/launch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -1341,7 +1475,7 @@
   function initClipboard() {
     dom.clipboardFetch.addEventListener('click', async () => {
       try {
-        const res = await fetch('/api/clipboard');
+        const res = await apiFetch('/api/clipboard');
         if (!res.ok) throw new Error();
         const data = await res.json();
         dom.clipboardText.value = data.text || '';
@@ -1358,7 +1492,7 @@
         return;
       }
       try {
-        const res = await fetch('/api/clipboard', {
+        const res = await apiFetch('/api/clipboard', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text }),
@@ -1404,6 +1538,7 @@
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload');
+    if (authToken) xhr.setRequestHeader('Authorization', 'Bearer ' + authToken);
 
     dom.uploadProgressContainer.hidden = false;
     dom.uploadProgressFill.style.width = '0%';
@@ -1689,8 +1824,17 @@
     dom.specialKeysBar.classList.add('visible');
     dom.btnMouse.classList.add('active');
 
-    // Connect
-    connect();
+    // Gate on authentication: verify any stored token, else show login.
+    initAuth();
+    setAuthMode('login');
+    verifyExistingToken().then((valid) => {
+      if (valid) {
+        hideAuth();
+        connect();
+      } else {
+        requireLogin();
+      }
+    });
   }
 
   // Wait for DOM if needed
