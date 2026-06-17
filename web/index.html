@@ -13,28 +13,50 @@
   h1{font-size:24px;font-weight:700;letter-spacing:-.02em;}
   h1 .a{color:var(--accent);}
   .sub{color:var(--muted);font-size:13px;margin-bottom:6px;text-align:center;}
-  input{width:100%;max-width:320px;padding:14px;border-radius:11px;border:1px solid var(--line);background:var(--surface);color:var(--text);font-size:16px;}
-  input:focus{outline:none;border-color:var(--accent);}
-  button{cursor:pointer;border:none;border-radius:11px;font-size:15px;font-weight:600;padding:14px 16px;color:var(--text);}
-  .primary{background:var(--accent);color:#07140a;width:100%;max-width:320px;}
+  input,textarea,select{width:100%;max-width:340px;padding:13px;border-radius:11px;border:1px solid var(--line);background:var(--surface);color:var(--text);font-size:16px;font-family:inherit;}
+  input:focus,textarea:focus{outline:none;border-color:var(--accent);}
+  button{cursor:pointer;border:none;border-radius:11px;font-size:15px;font-weight:600;padding:13px 16px;color:var(--text);}
+  .primary{background:var(--accent);color:#07140a;width:100%;max-width:340px;}
   .ghost{background:transparent;color:var(--muted);font-weight:500;}
-  .row{display:flex;gap:8px;width:100%;max-width:320px;}
+  .row{display:flex;gap:8px;width:100%;max-width:340px;}
   .row button{flex:1;}
-  .msg{color:var(--danger);font-size:13px;min-height:18px;text-align:center;max-width:320px;}
+  .msg{color:var(--danger);font-size:13px;min-height:18px;text-align:center;max-width:340px;}
   .msg.ok{color:var(--accent);}
-  .card{width:100%;max-width:320px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;}
+  .card{width:100%;max-width:340px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;}
   .card:hover{background:var(--surface2);}
   .card .name{font-weight:600;}
   .card .code{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--muted);font-size:12px;}
+
   #stage{position:fixed;inset:0;display:none;background:#000;}
   video{width:100%;height:100%;object-fit:contain;background:#000;touch-action:none;}
-  #bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px;background:linear-gradient(transparent,rgba(0,0,0,.6));z-index:5;}
-  #bar button{flex:1;background:var(--surface);border:1px solid var(--line);padding:11px 6px;font-size:12px;}
-  #bar button:active{background:var(--surface2);}
-  #status{position:fixed;top:8px;left:8px;font-size:11px;color:var(--muted);background:rgba(0,0,0,.55);padding:5px 9px;border-radius:7px;z-index:6;}
-  #signout{position:fixed;top:8px;right:8px;font-size:11px;color:var(--muted);background:rgba(0,0,0,.55);padding:5px 9px;border-radius:7px;z-index:6;border:none;}
+  #tap-start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);z-index:7;font-size:15px;}
+  #status{position:fixed;top:8px;left:8px;font-size:11px;color:var(--muted);background:rgba(0,0,0,.55);padding:5px 9px;border-radius:7px;z-index:8;}
+  #signout{position:fixed;top:8px;right:8px;font-size:11px;color:var(--muted);background:rgba(0,0,0,.55);padding:5px 9px;border-radius:7px;z-index:8;}
   #hidden-input{position:fixed;opacity:0;height:1px;width:1px;top:-100px;}
+
+  /* Bottom toolbar */
+  #bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:6px;padding:8px;background:linear-gradient(transparent,rgba(0,0,0,.65));z-index:6;overflow-x:auto;}
+  #bar button{flex:0 0 auto;background:var(--surface);border:1px solid var(--line);padding:10px 12px;font-size:12px;font-weight:600;border-radius:10px;}
+  #bar button:active{background:var(--surface2);}
+
+  /* Bottom sheet drawer */
+  #drawer{position:fixed;left:0;right:0;bottom:0;max-height:62vh;overflow-y:auto;background:#121214;border-top:1px solid var(--line);border-radius:16px 16px 0 0;padding:14px 14px 22px;z-index:9;transform:translateY(110%);transition:transform .22s cubic-bezier(.32,.72,0,1);}
+  #drawer.open{transform:translateY(0);}
+  .drawer-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+  .drawer-title{font-weight:700;font-size:15px;}
+  .drawer-close{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;}
+  .panel{display:none;flex-direction:column;gap:10px;}
+  .panel.active{display:flex;}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+  .grid button{background:var(--surface);border:1px solid var(--line);padding:12px 6px;font-size:13px;font-weight:600;}
+  .grid button.tg.on{background:var(--accent);color:#07140a;border-color:var(--accent);}
+  textarea{min-height:90px;resize:vertical;}
+  .hint{color:var(--muted);font-size:12px;}
   .hidden{display:none!important;}
+
+  /* Toast */
+  #toast{position:fixed;bottom:70px;left:50%;transform:translateX(-50%) translateY(120px);background:rgba(24,24,27,.97);border:1px solid var(--line);padding:9px 16px;border-radius:999px;font-size:13px;z-index:20;transition:transform .25s;}
+  #toast.show{transform:translateX(-50%) translateY(0);}
 </style>
 </head>
 <body>
@@ -53,7 +75,7 @@
   <div id="picker" class="center hidden">
     <h1>Your PCs</h1>
     <div class="sub" id="picker-sub">Pick a PC to control.</div>
-    <div id="session-list" style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:8px;"></div>
+    <div id="session-list" style="width:100%;max-width:340px;display:flex;flex-direction:column;gap:8px;"></div>
     <div class="row" style="margin-top:6px;">
       <button class="ghost" id="btn-refresh">Refresh</button>
       <button class="ghost" id="btn-signout-2">Sign out</button>
@@ -65,20 +87,130 @@
   <div id="stage">
     <div id="status">idle</div>
     <button id="signout">Exit</button>
-    <video id="video" autoplay playsinline></video>
+    <video id="video" autoplay playsinline muted></video>
+    <div id="tap-start" class="hidden">Tap to start</div>
     <input id="hidden-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+
     <div id="bar">
-      <button id="b-right">Right-click</button>
-      <button id="b-keys">Keyboard</button>
+      <button data-panel="mouse">🖱 Mouse</button>
+      <button id="b-right">Right</button>
       <button id="b-up">Scroll ▲</button>
       <button id="b-down">Scroll ▼</button>
+      <button data-panel="keys">⌨ Keys</button>
+      <button data-panel="apps" data-load="apps">▦ Apps</button>
+      <button data-panel="clip">📋 Clip</button>
+      <button data-panel="files">📤 Files</button>
+      <button data-panel="media">🎵 Media</button>
+      <button data-panel="settings">⚙ Quality</button>
+      <button id="b-audio">🔇 Audio</button>
+    </div>
+
+    <!-- Drawer -->
+    <div id="drawer">
+      <div class="drawer-head">
+        <div class="drawer-title" id="drawer-title">Panel</div>
+        <button class="drawer-close" id="drawer-close">Close</button>
+      </div>
+
+      <div class="panel" data-name="mouse">
+        <div class="hint">Tap = click · double-tap = double-click · drag = move cursor. Use the buttons for the rest.</div>
+        <div class="grid">
+          <button data-mouse="click">Left click</button>
+          <button data-mouse="dblclick">Double click</button>
+          <button data-mouse="rightclick">Right click</button>
+          <button data-mouse="mousedown">Hold ↓</button>
+          <button data-mouse="mouseup">Release ↑</button>
+        </div>
+      </div>
+
+      <div class="panel" data-name="keys">
+        <div class="hint">Toggle modifiers, then tap a key or combo.</div>
+        <div class="grid">
+          <button class="tg" data-mod="ctrl">Ctrl</button>
+          <button class="tg" data-mod="alt">Alt</button>
+          <button class="tg" data-mod="shift">Shift</button>
+          <button class="tg" data-mod="win">Win</button>
+        </div>
+        <div class="grid">
+          <button data-combo="ctrl,c">Copy</button>
+          <button data-combo="ctrl,v">Paste</button>
+          <button data-combo="ctrl,x">Cut</button>
+          <button data-combo="ctrl,z">Undo</button>
+          <button data-combo="ctrl,a">Select All</button>
+          <button data-combo="ctrl,s">Save</button>
+          <button data-combo="alt,Tab">Alt+Tab</button>
+          <button data-combo="alt,F4">Alt+F4</button>
+          <button data-combo="win,d">Win+D</button>
+        </div>
+        <div class="grid">
+          <button data-key="Escape">Esc</button>
+          <button data-key="Tab">Tab</button>
+          <button data-key="Enter">Enter</button>
+          <button data-key="Backspace">⌫</button>
+          <button data-key="Delete">Del</button>
+          <button data-key="Home">Home</button>
+          <button data-key="End">End</button>
+          <button data-key="PageUp">PgUp</button>
+          <button data-key="PageDown">PgDn</button>
+          <button data-key="ArrowUp">↑</button>
+          <button data-key="ArrowDown">↓</button>
+          <button data-key="ArrowLeft">←</button>
+          <button data-key="ArrowRight">→</button>
+        </div>
+        <button class="primary" id="b-typebox">Open keyboard to type</button>
+      </div>
+
+      <div class="panel" data-name="apps">
+        <div class="hint">Tap an app to launch it on the PC.</div>
+        <div class="grid" id="apps-grid"></div>
+        <button class="ghost" id="apps-reload">Reload list</button>
+      </div>
+
+      <div class="panel" data-name="clip">
+        <textarea id="clip-text" placeholder="Clipboard text…"></textarea>
+        <div class="row">
+          <button id="clip-get">Get from PC</button>
+          <button id="clip-set" class="primary">Send to PC</button>
+        </div>
+      </div>
+
+      <div class="panel" data-name="files">
+        <div class="hint">Files are saved to the PC's Downloads/PhoneUploads folder.</div>
+        <input id="file-input" type="file" />
+        <div class="hint" id="file-status"></div>
+      </div>
+
+      <div class="panel" data-name="media">
+        <div class="grid">
+          <button data-media="playpause">⏯ Play/Pause</button>
+          <button data-media="prevtrack">⏮ Prev</button>
+          <button data-media="nexttrack">⏭ Next</button>
+          <button data-media="volumedown">🔉 Vol −</button>
+          <button data-media="volumeup">🔊 Vol +</button>
+          <button data-media="mute">🔇 Mute</button>
+        </div>
+      </div>
+
+      <div class="panel" data-name="settings">
+        <div class="hint">Quality: <span id="q-val">85</span></div>
+        <input id="q-range" type="range" min="30" max="95" value="85" />
+        <div class="hint">Max FPS</div>
+        <select id="fps-sel">
+          <option value="15">15</option>
+          <option value="30" selected>30</option>
+          <option value="60">60</option>
+        </select>
+        <button class="primary" id="apply-settings">Apply</button>
+      </div>
     </div>
   </div>
+
+  <div id="toast"></div>
 
   <script type="module">
     import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-    // ── Config (public — safe to ship; RLS governs access) ──────────────────
+    // ── Config (public — RLS governs access) ────────────────────────────────
     const SUPABASE_URL = "https://yqbkdajkvjxqwcmlxtja.supabase.co";
     const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlxYmtkYWprdmp4cXdjbWx4dGphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MTMwMjQsImV4cCI6MjA5NzI4OTAyNH0.KjLOR2ihEFm-axJYLtM7eRoGT-y7EnVvhul7bFGQuxw";
 
@@ -94,6 +226,8 @@
     };
     const setMsg = (el, t, ok) => { const m = $(el); m.textContent = t || ""; m.className = "msg" + (ok ? " ok" : ""); };
     const setStatus = (t) => { $("status").textContent = t; };
+    let toastTimer = null;
+    const toast = (t) => { const e = $("toast"); e.textContent = t; e.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => e.classList.remove("show"), 2200); };
 
     // ── Auth ────────────────────────────────────────────────────────────────
     $("btn-login").onclick = async () => {
@@ -113,11 +247,9 @@
     $("signout").onclick = signOut;
     $("btn-signout-2").onclick = signOut;
     $("btn-refresh").onclick = () => loadSessions();
-
     sb.auth.getSession().then(({ data }) => { if (data.session) afterLogin(); else show("login"); });
 
     async function afterLogin() {
-      // If a room is pinned in the URL, go straight in.
       const room = (params.get("room") || "").toUpperCase();
       if (room) return connect(room);
       await loadSessions();
@@ -126,19 +258,13 @@
     async function loadSessions() {
       show("picker");
       setMsg("picker-msg", "");
-      const { data, error } = await sb
-        .from("sessions")
+      const { data, error } = await sb.from("sessions")
         .select("room_code, host_name, status, last_seen_at")
-        .eq("status", "online")
-        .order("last_seen_at", { ascending: false });
+        .eq("status", "online").order("last_seen_at", { ascending: false });
       if (error) { setMsg("picker-msg", error.message); return; }
-      const list = $("session-list");
-      list.innerHTML = "";
-      if (!data || data.length === 0) {
-        $("picker-sub").textContent = "No PCs online. Start pcphone on your PC and sign in there.";
-        return;
-      }
-      if (data.length === 1) return connect(data[0].room_code); // auto-connect the only one
+      const list = $("session-list"); list.innerHTML = "";
+      if (!data || data.length === 0) { $("picker-sub").textContent = "No PCs online. Start pcphone on your PC and sign in there."; return; }
+      if (data.length === 1) return connect(data[0].room_code);
       $("picker-sub").textContent = "Pick a PC to control.";
       for (const s of data) {
         const el = document.createElement("div");
@@ -150,7 +276,7 @@
     }
 
     // ── WebRTC viewer ─────────────────────────────────────────────────────────
-    let pc = null, channel = null, dc = null, currentRoom = null;
+    let pc = null, channel = null, dc = null;
     const video = $("video");
 
     function cleanup() {
@@ -161,7 +287,6 @@
 
     async function connect(room) {
       cleanup();
-      currentRoom = room;
       show("stage");
       setStatus("joining " + room + "…");
       channel = sb.channel("room:" + room, { config: { broadcast: { self: false } } });
@@ -175,10 +300,18 @@
     async function onOffer(payload) {
       setStatus("connecting…");
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      pc.ontrack = (e) => { if (video.srcObject !== e.streams[0]) video.srcObject = e.streams[0]; };
-      pc.ondatachannel = (e) => { dc = e.channel; dc.onopen = () => setStatus("connected"); };
+      pc.ontrack = (e) => {
+        if (video.srcObject !== e.streams[0]) video.srcObject = e.streams[0];
+        video.muted = audioMuted;
+        video.play().then(() => $("tap-start").classList.add("hidden")).catch(() => $("tap-start").classList.remove("hidden"));
+      };
+      pc.ondatachannel = (e) => {
+        dc = e.channel; dc.binaryType = "arraybuffer";
+        dc.onopen = () => setStatus("connected");
+        dc.onmessage = onDcMessage;
+      };
       pc.onicecandidate = (e) => { if (e.candidate) send("ice", { to: "host", from: peerId, peerId, role: "viewer", candidate: e.candidate }); };
-      pc.onconnectionstatechange = () => { setStatus(pc.connectionState); if (pc.connectionState === "failed") setStatus("connection failed — try Exit & reconnect"); };
+      pc.onconnectionstatechange = () => { setStatus(pc.connectionState); if (pc.connectionState === "failed") setStatus("connection failed — Exit & reconnect"); };
       await pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -186,8 +319,25 @@
     }
     async function onRemoteIce(c) { try { if (pc && c) await pc.addIceCandidate(c); } catch (e) {} }
 
-    // ── Input (phone → PC over the data channel) ──────────────────────────────
-    function di(obj) { if (dc && dc.readyState === "open") dc.send(JSON.stringify(obj)); }
+    // Replies from the PC.
+    function onDcMessage(e) {
+      if (typeof e.data !== "string") return;
+      let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+      switch (m.t) {
+        case "clipboard": $("clip-text").value = m.text || ""; toast("Clipboard pulled from PC"); break;
+        case "clipboard-set": toast("Sent to PC clipboard"); break;
+        case "apps": renderApps(m.apps || []); break;
+        case "launch-result": toast(m.success ? "Launched" : ("Launch failed: " + (m.message || ""))); break;
+        case "upload-done": $("file-status").textContent = "Uploaded: " + m.name; toast("Uploaded " + m.name); break;
+        case "upload-error": $("file-status").textContent = "Upload failed: " + m.message; toast("Upload failed"); break;
+        default: break;
+      }
+    }
+
+    // ── Send helpers ──────────────────────────────────────────────────────────
+    function di(obj) { if (dc && dc.readyState === "open") dc.send(JSON.stringify(obj)); else toast("Not connected"); }
+
+    // ── Pointer input ─────────────────────────────────────────────────────────
     function norm(ev) {
       const r = video.getBoundingClientRect();
       const vw = video.videoWidth || r.width, vh = video.videoHeight || r.height;
@@ -205,15 +355,98 @@
       if (!moved) { const now = Date.now(); di({ t: now - lastTap < 280 ? "dblclick" : "click" }); lastTap = now; }
       downPt = null;
     });
+
+    // ── Toolbar / drawer ──────────────────────────────────────────────────────
     $("b-right").onclick = () => di({ t: "rightclick" });
     $("b-up").onclick = () => di({ t: "scroll", dy: -300 });
     $("b-down").onclick = () => di({ t: "scroll", dy: 300 });
+
+    let audioMuted = true;
+    $("b-audio").onclick = () => { audioMuted = !audioMuted; video.muted = audioMuted; $("b-audio").textContent = audioMuted ? "🔇 Audio" : "🔊 Audio"; if (!audioMuted) video.play().catch(()=>{}); };
+
+    const drawer = $("drawer");
+    function openPanel(name, title) {
+      document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.dataset.name === name));
+      $("drawer-title").textContent = title || name;
+      drawer.classList.add("open");
+    }
+    $("drawer-close").onclick = () => drawer.classList.remove("open");
+    document.querySelectorAll("#bar [data-panel]").forEach((b) => {
+      b.onclick = () => {
+        openPanel(b.dataset.panel, b.textContent.replace(/^\S+\s/, ""));
+        if (b.dataset.load === "apps") di({ t: "getapps" });
+      };
+    });
+
+    // Mouse panel
+    document.querySelectorAll('[data-mouse]').forEach((b) => b.onclick = () => di({ t: b.dataset.mouse }));
+
+    // Keys panel
+    const mods = { ctrl: false, alt: false, shift: false, win: false };
+    document.querySelectorAll('[data-mod]').forEach((b) => b.onclick = () => {
+      const k = b.dataset.mod; mods[k] = !mods[k]; b.classList.toggle("on", mods[k]);
+    });
+    function activeMods() { return Object.keys(mods).filter((k) => mods[k]); }
+    function clearMods() { Object.keys(mods).forEach((k) => mods[k] = false); document.querySelectorAll('[data-mod]').forEach((b) => b.classList.remove("on")); }
+    document.querySelectorAll('[data-key]').forEach((b) => b.onclick = () => {
+      const m = activeMods();
+      if (m.length) { di({ t: "hotkey", modifiers: m, key: b.dataset.key }); clearMods(); }
+      else di({ t: "key", key: b.dataset.key });
+    });
+    document.querySelectorAll('[data-combo]').forEach((b) => b.onclick = () => {
+      const parts = b.dataset.combo.split(","); const key = parts.pop();
+      di({ t: "hotkey", modifiers: parts, key });
+    });
     const hi = $("hidden-input");
-    $("b-keys").onclick = () => hi.focus();
+    $("b-typebox").onclick = () => hi.focus();
     hi.addEventListener("input", () => { if (hi.value) { di({ t: "text", text: hi.value }); hi.value = ""; } });
     hi.addEventListener("keydown", (e) => {
       if (["Backspace", "Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) { di({ t: "key", key: e.key }); e.preventDefault(); }
     });
+
+    // Apps panel
+    function renderApps(apps) {
+      const g = $("apps-grid"); g.innerHTML = "";
+      for (const a of apps) {
+        const b = document.createElement("button");
+        b.textContent = (a.icon ? a.icon + " " : "") + a.name;
+        b.onclick = () => di({ t: "launch", name: a.name });
+        g.appendChild(b);
+      }
+    }
+    $("apps-reload").onclick = () => di({ t: "getapps" });
+
+    // Clipboard panel
+    $("clip-get").onclick = () => di({ t: "getclipboard" });
+    $("clip-set").onclick = () => di({ t: "setclipboard", text: $("clip-text").value });
+
+    // Media panel
+    document.querySelectorAll('[data-media]').forEach((b) => b.onclick = () => di({ t: "media", action: b.dataset.media }));
+
+    // Settings panel
+    $("q-range").addEventListener("input", () => $("q-val").textContent = $("q-range").value);
+    $("apply-settings").onclick = () => { di({ t: "settings", quality: parseInt($("q-range").value, 10), maxFps: parseInt($("fps-sel").value, 10) }); toast("Quality applied"); };
+
+    // Files panel — chunked upload over the data channel
+    $("file-input").addEventListener("change", async () => {
+      const file = $("file-input").files[0]; if (!file) return;
+      if (!dc || dc.readyState !== "open") { toast("Not connected"); return; }
+      const CHUNK = 16 * 1024;
+      $("file-status").textContent = "Uploading " + file.name + "…";
+      di({ t: "upload-begin", name: file.name, size: file.size });
+      const buf = await file.arrayBuffer();
+      for (let o = 0; o < buf.byteLength; o += CHUNK) {
+        while (dc.bufferedAmount > (1 << 20)) await new Promise((r) => setTimeout(r, 15));
+        dc.send(buf.slice(o, o + CHUNK));
+        $("file-status").textContent = "Uploading " + file.name + " — " + Math.min(100, Math.round((o / buf.byteLength) * 100)) + "%";
+      }
+      di({ t: "upload-end", name: file.name });
+      $("file-status").textContent = "Finalizing " + file.name + "…";
+      $("file-input").value = "";
+    });
+
+    // Tap-to-start fallback
+    $("tap-start").onclick = () => { video.muted = audioMuted; video.play().catch(() => {}); $("tap-start").classList.add("hidden"); };
   </script>
 </body>
 </html>

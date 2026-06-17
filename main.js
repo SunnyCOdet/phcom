@@ -1,8 +1,12 @@
 const { app, BrowserWindow, ipcMain, clipboard, Tray, Menu, nativeImage, dialog, desktopCapturer, screen, systemPreferences } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { startServer, stopServer, getStatus, sendRTCToClient, setCaptureSignalHandler } = require('./src/server/index');
 const { getLocalIP, generateQRCode, startMDNS, stopMDNS } = require('./src/server/network');
 const inputController = require('./src/server/input-controller');
+const appLauncher = require('./src/server/app-launcher');
+const mediaKeys = require('./src/server/media-keys');
+const fileUpload = require('./src/server/file-upload');
 const supabaseConfig = require('./src/server/supabase-config');
 
 const PORT = 7898;
@@ -260,24 +264,86 @@ function setupIPC() {
     webAppUrl: supabaseConfig.webAppUrl
   }));
 
-  // Input from a remote phone, relayed over the WebRTC data channel. Coordinates
-  // are normalized (0..1); moveMouseAbsolute already expects normalized values.
+  // Send a reply back to a specific remote phone over its data channel.
+  function sendToPeer(peerId, msg) {
+    if (peerId && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('remote-send', { peerId, msg });
+    }
+  }
+
+  // Input + control from a remote phone, relayed over the WebRTC data channel.
+  // Coordinates are normalized (0..1); moveMouseAbsolute expects normalized.
+  // Some messages (clipboard/apps/media/launch) produce a reply to the phone.
   ipcMain.on('remote-input', async (event, msg) => {
     if (!msg || typeof msg.t !== 'string') return;
+    const peerId = msg.peerId;
     try {
       switch (msg.t) {
         case 'move': await inputController.moveMouseAbsolute(msg.nx || 0, msg.ny || 0); break;
         case 'click': await inputController.leftClick(); break;
         case 'dblclick': await inputController.doubleClick(); break;
         case 'rightclick': await inputController.rightClick(); break;
+        case 'mousedown': await inputController.mouseDown(); break;
+        case 'mouseup': await inputController.mouseUp(); break;
         case 'scroll': await inputController.scroll(msg.dx || 0, msg.dy || 0); break;
         case 'text': await inputController.typeText(msg.text || ''); break;
         case 'key': await inputController.pressKey(msg.key || ''); break;
         case 'hotkey': await inputController.hotkey(msg.modifiers || [], msg.key || ''); break;
+
+        case 'media': {
+          const r = await mediaKeys.mediaAction(msg.action || '');
+          sendToPeer(peerId, { t: 'media-result', ...r });
+          break;
+        }
+        case 'getclipboard':
+          sendToPeer(peerId, { t: 'clipboard', text: clipboard.readText() });
+          break;
+        case 'setclipboard':
+          clipboard.writeText(msg.text || '');
+          sendToPeer(peerId, { t: 'clipboard-set', ok: true });
+          break;
+        case 'getapps':
+          sendToPeer(peerId, { t: 'apps', apps: appLauncher.getApps() });
+          break;
+        case 'launch': {
+          const r = await appLauncher.launchApp(msg.name);
+          sendToPeer(peerId, { t: 'launch-result', ...r });
+          break;
+        }
+        case 'settings':
+          // Forward stream quality/fps changes to the capture renderer.
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('remote-settings', { quality: msg.quality, maxFps: msg.maxFps });
+          }
+          break;
         default: break;
       }
     } catch (err) {
       console.error('[main] remote-input error:', err.message);
+    }
+  });
+
+  // File received from a remote phone (reassembled in the renderer, sent here as
+  // one ArrayBuffer). Saved to the same Downloads/PhoneUploads dir as LAN uploads.
+  ipcMain.on('remote-upload', (event, data) => {
+    if (!data || !data.buffer) return;
+    try {
+      const dir = fileUpload.UPLOAD_DIR;
+      fs.mkdirSync(dir, { recursive: true });
+      let name = path.basename(data.name || 'upload.bin');
+      let target = path.join(dir, name);
+      if (fs.existsSync(target)) {
+        const ext = path.extname(name);
+        const base = path.basename(name, ext);
+        name = `${base}_${Date.now()}${ext}`;
+        target = path.join(dir, name);
+      }
+      fs.writeFileSync(target, Buffer.from(data.buffer));
+      console.log(`[main] Remote upload saved: ${target} (${data.buffer.byteLength || 0} bytes)`);
+      sendToPeer(data.peerId, { t: 'upload-done', name });
+    } catch (err) {
+      console.error('[main] remote-upload error:', err.message);
+      sendToPeer(data.peerId, { t: 'upload-error', message: err.message });
     }
   });
 

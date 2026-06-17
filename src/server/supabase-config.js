@@ -18,8 +18,6 @@ module.exports = {
   functionsUrl: `${SUPABASE_URL}/functions/v1`,
   registerSessionUrl: `${SUPABASE_URL}/functions/v1/register-session`,
   appUrl: `${SUPABASE_URL}/functions/v1/app`,
-  // The phone web client. Defaults to the edge-function page, but set
-  // PCPHONE_WEB_URL to your deployed site (e.g. https://pcphone.vercel.app)
-  // so the QR / shared link points there instead.
-  webAppUrl: process.env.PCPHONE_WEB_URL || `${SUPABASE_URL}/functions/v1/app`,
+  // The phone web client (deployed to Vercel). Override with PCPHONE_WEB_URL.
+  webAppUrl: process.env.PCPHONE_WEB_URL || 'https://phcom.vercel.app',
 };

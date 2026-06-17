@@ -30,6 +30,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSupabaseConfig: () => ipcRenderer.invoke('get-supabase-config'),
   // Renderer reports the public remote URL (from register-session) for the tray/QR.
   setRemoteUrl: (info) => ipcRenderer.invoke('set-remote-url', info),
-  // Input received from a remote phone over the WebRTC data channel.
-  sendRemoteInput: (msg) => ipcRenderer.send('remote-input', msg)
+  // Input/control received from a remote phone over the WebRTC data channel.
+  sendRemoteInput: (msg) => ipcRenderer.send('remote-input', msg),
+  // A reassembled file from a remote phone, to be written to disk.
+  sendRemoteUpload: (data) => ipcRenderer.send('remote-upload', data),
+  // Replies the main process wants delivered back to a specific phone's channel.
+  onRemoteReply: (callback) => ipcRenderer.on('remote-send', (_, data) => callback(data)),
+  // Stream quality/fps changes requested by a remote phone.
+  onRemoteSettings: (callback) => ipcRenderer.on('remote-settings', (_, data) => callback(data))
 });

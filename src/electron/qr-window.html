@@ -1242,6 +1242,7 @@
       getCaptureSettings: () => captureSettings,
       applyRTCSenderQuality: (sender) => applyRTCSenderQuality(sender),
       preferHighQualityCodec: (sdp) => preferHighQualityCodec(sdp),
+      applySettings: (s) => applyCaptureSettings(s),
       log,
     };
   </script>
@@ -1269,14 +1270,57 @@
     let sb = null;
     let channel = null;
     const remotePeers = new Map(); // peerId -> RTCPeerConnection
+    const remoteChannels = new Map(); // peerId -> RTCDataChannel
+    const uploads = new Map(); // peerId -> { name, chunks: [] }
+
+    // Deliver replies the main process produced (clipboard text, app list, etc.)
+    // back to the originating phone over its data channel.
+    api.onRemoteReply(({ peerId, msg }) => {
+      const dc = remoteChannels.get(peerId);
+      if (dc && dc.readyState === 'open') {
+        try { dc.send(JSON.stringify(msg)); } catch (e) {}
+      }
+    });
+    // A phone changed stream quality/fps — apply it to the capture pipeline and
+    // re-apply encoder params to all connected remote peers.
+    api.onRemoteSettings((s) => {
+      try { B.applySettings(s); } catch (e) {}
+      for (const pc of remotePeers.values()) {
+        pc.getSenders().forEach((snd) => B.applyRTCSenderQuality(snd));
+      }
+    });
+
+    function showLogin(msg) {
+      $('relay-login').style.display = 'flex';
+      if (msg) setMsg(msg);
+    }
+
+    // Return a valid access token, refreshing it if it's missing/near expiry.
+    async function freshToken() {
+      let { data } = await sb.auth.getSession();
+      if (!data.session) return null;
+      const expMs = data.session.expires_at ? data.session.expires_at * 1000 : 0;
+      if (!expMs || expMs - Date.now() < 60000) {
+        const r = await sb.auth.refreshSession();
+        if (r.error || !r.data.session) return null;
+        data = r.data;
+      }
+      return data.session.access_token;
+    }
 
     async function initSupabase() {
       const cfg = await api.getSupabaseConfig();
-      sb = createClient(cfg.url, cfg.anonKey, { auth: { persistSession: true } });
+      sb = createClient(cfg.url, cfg.anonKey, { auth: { persistSession: true, autoRefreshToken: true } });
       window.__sbCfg = cfg;
-      // Auto-resume an existing session.
+      // Auto-resume an existing session — but only if its token is still valid.
       const { data } = await sb.auth.getSession();
-      if (data.session) onAuthed();
+      if (data.session) {
+        const token = await freshToken();
+        if (token) onAuthed();
+        else showLogin('Session expired — please sign in again');
+      } else {
+        showLogin();
+      }
     }
 
     $('relay-signin').onclick = async () => {
@@ -1299,17 +1343,18 @@
         await registerAndAdvertise();
       } catch (err) {
         B.log('[Relay] Registration failed: ' + err.message);
+        showLogin('Could not connect: ' + err.message);
       }
     }
 
     async function registerAndAdvertise() {
       const cfg = window.__sbCfg;
-      const { data: { session } } = await sb.auth.getSession();
-      if (!session) throw new Error('No session');
+      const token = await freshToken();
+      if (!token) throw new Error('Session expired');
 
       const resp = await fetch(cfg.registerSessionUrl, {
         method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + session.access_token, 'Content-Type': 'application/json' },
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
         body: JSON.stringify({ host_name: 'pcphone host' }),
       });
       const out = await resp.json();
@@ -1333,11 +1378,13 @@
       badge.className = 'tunnel-badge active'; btext.textContent = 'Supabase relay active';
 
       joinChannel(out.room_code);
-      // Refresh the session row periodically so it stays "online".
-      setInterval(() => {
+      // Keep the session row "online" with a freshly-refreshed token each time.
+      setInterval(async () => {
+        const t = await freshToken();
+        if (!t) return;
         fetch(cfg.registerSessionUrl, {
           method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + session.access_token, 'Content-Type': 'application/json' },
+          headers: { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' },
           body: JSON.stringify({ room_code: out.room_code, host_name: 'pcphone host' }),
         }).catch(() => {});
       }, 60000);
@@ -1373,10 +1420,28 @@
         if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) closeRemotePeer(peerId);
       };
 
-      // Data channel carries phone → PC input.
+      // Data channel carries phone → PC input/control (and file uploads).
       const dc = pc.createDataChannel('input');
+      dc.binaryType = 'arraybuffer';
+      remoteChannels.set(peerId, dc);
       dc.onmessage = (e) => {
-        try { api.sendRemoteInput(JSON.parse(e.data)); } catch (err) {}
+        if (typeof e.data === 'string') {
+          let msg; try { msg = JSON.parse(e.data); } catch (err) { return; }
+          if (msg.t === 'upload-begin') { uploads.set(peerId, { name: msg.name, chunks: [] }); return; }
+          if (msg.t === 'upload-end') {
+            const u = uploads.get(peerId); uploads.delete(peerId);
+            if (u) {
+              new Blob(u.chunks).arrayBuffer().then((buf) => {
+                api.sendRemoteUpload({ peerId, name: u.name, buffer: buf });
+              });
+            }
+            return;
+          }
+          api.sendRemoteInput({ peerId, ...msg });
+        } else {
+          const u = uploads.get(peerId);
+          if (u) u.chunks.push(e.data); // binary file chunk
+        }
       };
 
       stream.getVideoTracks().forEach((t) => { t.contentHint = 'detail'; const s = pc.addTrack(t, stream); B.applyRTCSenderQuality(s); });
@@ -1404,6 +1469,8 @@
     function closeRemotePeer(peerId) {
       const pc = remotePeers.get(peerId);
       if (pc) { try { pc.close(); } catch (e) {} remotePeers.delete(peerId); }
+      remoteChannels.delete(peerId);
+      uploads.delete(peerId);
     }
 
     initSupabase().catch((err) => B.log('[Relay] init error: ' + err.message));
