@@ -515,30 +515,28 @@
     function getRTCMaxBitrate() {
       const pixels = captureWidth * captureHeight;
       const qualityScale = captureSettings.quality / 95;
-      // Discord-level bitrates: aggressive high quality for screen sharing
-      let bitrate = 40000000; // 40 Mbps base for 1080p
+      // VP8 bitrates for screen sharing
+      let bitrate = 15000000; // 15 Mbps for 1080p
 
       if (pixels > 2560 * 1440) {
-        bitrate = 100000000; // 100 Mbps for 4K
+        bitrate = 30000000; // 30 Mbps for 4K
       } else if (pixels > 1920 * 1080) {
-        bitrate = 60000000;  // 60 Mbps for 1440p
+        bitrate = 20000000;  // 20 Mbps for 1440p
       }
 
-      const finalBitrate = Math.round(bitrate * qualityScale);
-      console.log('[RTC] Calculated max bitrate:', (finalBitrate / 1000000).toFixed(1), 'Mbps for', captureWidth + 'x' + captureHeight, 'quality:', captureSettings.quality);
-      return finalBitrate;
+      return Math.round(bitrate * qualityScale);
     }
 
-    async function applyRTCSenderQuality(sender) {
+    async function applyRTCSenderQuality(sender, silent = false) {
       if (!sender || !sender.track) return;
 
       // Discord-style: force detail content hint for screen share quality
       sender.track.contentHint = 'detail';
-      console.log('[RTC] Applying sender quality - track kind:', sender.track.kind, 'enabled:', sender.track.enabled);
+      if (!silent) console.log('[RTC] Applying sender quality - track kind:', sender.track.kind, 'enabled:', sender.track.enabled);
 
       const params = sender.getParameters();
-      // Maintain resolution but allow balanced FPS tradeoff
-      params.degradationPreference = 'balanced';
+      // Maintain resolution for clear text readability
+      params.degradationPreference = 'maintain-resolution';
       params.encodings = params.encodings && params.encodings.length > 0 ? params.encodings : [{}];
       
       const maxBitrate = getRTCMaxBitrate();
@@ -552,12 +550,13 @@
         priority: 'high',
       };
 
-      console.log('[RTC] Sender params:', JSON.stringify({
-        degradationPreference: params.degradationPreference,
-        maxBitrate: (maxBitrate / 1000000).toFixed(1) + ' Mbps',
-        maxFramerate: captureSettings.maxFps,
-        scaleResolutionDownBy: 1,
-      }));
+      if (!silent) {
+        console.log('[RTC] Sender params:', JSON.stringify({
+          degradationPreference: params.degradationPreference,
+          maxBitrate: (maxBitrate / 1000000).toFixed(1) + ' Mbps',
+          maxFramerate: captureSettings.maxFps,
+        }));
+      }
 
       try {
         await sender.setParameters(params);
@@ -568,9 +567,10 @@
       }
     }
 
+    let lastSenderParamsLog = '';
     function updateAllRTCSenderQuality() {
       for (const peer of rtcPeers.values()) {
-        peer.getSenders().forEach((sender) => applyRTCSenderQuality(sender));
+        peer.getSenders().forEach((sender) => applyRTCSenderQuality(sender, true));
       }
     }
 
@@ -710,24 +710,21 @@
       }
     }
 
-    // Prefer VP9 or H264 High profile for better screen share quality (like Discord)
+    // Add bandwidth hint to SDP
     function preferHighQualityCodec(sdp) {
-      // Boost b=AS bandwidth line if present, or add it
       const maxBitrateKbps = Math.round(getRTCMaxBitrate() / 1000);
-      
-      // Replace or add bandwidth line for video
       let modifiedSdp = sdp;
+
+      // Add bandwidth line
       if (modifiedSdp.includes('m=video')) {
-        // Remove existing b= lines for video
         modifiedSdp = modifiedSdp.replace(/b=AS:\d+\r\n/g, '');
-        // Add high bandwidth after m=video line
         modifiedSdp = modifiedSdp.replace(
           /(m=video .*\r\n)/,
           `$1b=AS:${maxBitrateKbps}\r\n`
         );
       }
-      
-      console.log('[RTC] SDP modified: max bandwidth set to', maxBitrateKbps, 'kbps');
+
+      log('[RTC] SDP modified: bandwidth=' + maxBitrateKbps + ' kbps');
       return modifiedSdp;
     }
 
