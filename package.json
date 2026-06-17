@@ -5,10 +5,62 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
   },
-  "author": "sunny",
+  "author": {
+    "name": "sunny",
+    "email": "egnanadeep@gmail.com"
+  },
   "license": "MIT",
+  "build": {
+    "appId": "com.sunny.pcphone",
+    "productName": "pcphone",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "package.json",
+      "!**/test-*.js",
+      "!**/*.log",
+      "!**/.env"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/sharp/**",
+      "node_modules/@img/**",
+      "node_modules/sqlite3/**",
+      "node_modules/@nut-tree-fork/**",
+      "node_modules/screenshot-desktop/**",
+      "src/public/**"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    }
+  },
   "dependencies": {
     "@ngrok/ngrok": "^1.7.0",
     "@nut-tree-fork/nut-js": "^4.2.6",
@@ -25,6 +77,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "electron": "^35.7.5"
+    "electron": "^35.7.5",
+    "electron-builder": "^25.1.8"
   }
 }
