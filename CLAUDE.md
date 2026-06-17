@@ -65,18 +65,25 @@ phone client  <--WebSocket-->  Node server  <--IPC-->  main.js  <--IPC-->  captu
 - `app-launcher.js` — whitelisted apps only (`APPS` array); `getApps()` deliberately strips the `command` field before returning to clients.
 - `file-upload.js` — multer; saves to `~/Downloads/PhoneUploads`, de-duplicates filenames with a timestamp.
 - `clipboard.js`, `media-keys.js`, `notifications.js` — clipboard get/set, media key actions, OS notification → broadcast to clients.
-- `network.js` — local IP detection (prefers Wi-Fi, skips virtual/WSL adapters), QR generation, mDNS advertisement (`my-pc.local` via bonjour), and `localtunnel` for remote access. Loads a root `.env` if present.
+- `network.js` — local IP detection (prefers Wi-Fi, skips virtual/WSL adapters), QR generation, mDNS advertisement (`my-pc.local` via bonjour). Loads a root `.env` if present. (Its `startTunnel`/`getTunnelUrl` localtunnel helpers are now dead code — remote access goes through the Supabase relay; see Authentication below.)
 
 ### REST API (Express)
 `/api/status`, `/api/apps`, `/api/launch`, `/api/clipboard` (GET/POST), `/api/upload`. These duplicate some WebSocket capabilities for non-realtime use. All require auth (below).
 
-### Authentication (`src/server/auth.js`)
-Every control path requires a session token:
-- **Public** endpoints: `/api/auth/{register,login,logout,me,config}` and the static UI assets.
-- **Protected** REST endpoints take `auth.requireAuth` middleware (reads `Authorization: Bearer <token>`).
-- **WebSocket** is gated in `setupWebSocket`: the token is passed as `?token=...` on the WS URL; an invalid/missing token is closed with code **4401** before the client is added.
-- **Open self-registration** is the chosen model — anyone reachable can register. `auth.setRegistrationOpen(false)` locks it. Passwords are scrypt-hashed (Node `crypto`, no native dep); users + sessions persist to `pcphone-auth.json` in Electron's `userData` dir; sessions last 30 days.
-- Client side (`src/public/index.js`): a login/register overlay gates the app; the token is stored in `localStorage` (`pcphone_token`), attached to the WS URL, sent via the `apiFetch` wrapper (and the upload XHR), and a 401/4401 re-shows the login screen.
+### Authentication (`src/server/auth.js`) — Supabase Auth
+Auth is backed by **Supabase Auth** (the old scrypt/JSON store was removed). Every control path requires a valid Supabase **access token (JWT)**:
+- **Public** endpoints: `/api/auth/me` (validates a token), `/api/auth/config` (returns `supabaseUrl` + `supabaseAnonKey` for the client), and the static UI assets. `/api/auth/{register,login,logout}` now return **410** — sign-up/sign-in happen client-side against Supabase.
+- `auth.verifyToken(token)` is **async**: it validates the JWT against `${SUPABASE_URL}/auth/v1/user` (with a 60s in-memory cache). `auth.requireAuth` middleware and the WebSocket handler both `await` it.
+- **WebSocket** is gated in `setupWebSocket`: the Supabase token is passed as `?token=...` on the WS URL; invalid/missing is closed with code **4401**.
+- Project config lives in `src/server/supabase-config.js` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, edge-function URLs), overridable via env.
+- LAN client (`src/public/index.js`): loads `@supabase/supabase-js` (UMD CDN), fetches `/api/auth/config`, signs in via `signInWithPassword`/`signUp` (email + password), stores the access token in `localStorage` (`pcphone_token`), keeps it fresh via `onAuthStateChange`, and attaches it to the WS URL + `apiFetch`.
+
+### Remote access & WebRTC relay (Supabase, replaces localtunnel)
+Remote connectivity no longer uses localtunnel. Instead:
+- **`register-session` edge function** (JWT-gated): the desktop (QR window, after host sign-in) calls it and gets back a `room_code` and the public connection **URL** (`/functions/v1/app?room=CODE`). Backed by the `public.sessions` table (RLS: owner full access; authenticated users may read `online` rows to connect).
+- **`app` edge function** (`verify_jwt:false`): serves the self-contained remote phone client (Supabase login → join room → WebRTC receive video → input over a data channel).
+- **Signaling** is relayed over **Supabase Realtime broadcast** on channel `room:<code>` (events `join`/`offer`/`answer`/`ice`). Media stays **P2P** over WebRTC; only signaling crosses Supabase.
+- Desktop host logic lives in the **ES-module `<script>`** in `qr-window.html` (separate scope from the classic capture script, which exposes `window.__pcphone`). It creates an offer-side peer per remote viewer, reusing the existing capture `streamInstance`, and forwards data-channel input to `main.js` via the `remote-input` IPC → `input-controller`. `main.js` IPC additions: `get-supabase-config`, `set-remote-url`, `remote-input`.
 
 ### License
 Source-available, **not** OSI open source. `LICENSE` (pcphone Non-Commercial License) permits non-commercial use only; commercial rights are reserved exclusively to the Licensor. `package.json` license field is `SEE LICENSE IN LICENSE`.

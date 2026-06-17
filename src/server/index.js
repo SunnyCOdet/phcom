@@ -51,26 +51,14 @@ function createApp() {
   // Parse JSON request bodies
   app.use(express.json());
 
-  // --- Auth endpoints (public — no token required) ---
+  // --- Auth endpoints ---
+  // Registration/login now happen client-side against Supabase Auth, so the old
+  // server-side credential endpoints are gone. These remain only to validate a
+  // token and to hand the client its Supabase config.
 
-  // POST /api/auth/register — create an account and receive a session token
-  app.post('/api/auth/register', (req, res) => {
-    const { username, password } = req.body || {};
-    const result = auth.register(username, password);
-    res.status(result.ok ? 200 : 400).json(result);
-  });
-
-  // POST /api/auth/login — exchange credentials for a session token
-  app.post('/api/auth/login', (req, res) => {
-    const { username, password } = req.body || {};
-    const result = auth.login(username, password);
-    res.status(result.ok ? 200 : 401).json(result);
-  });
-
-  // POST /api/auth/logout — invalidate the current token
-  app.post('/api/auth/logout', (req, res) => {
-    auth.logout(auth.extractToken(req));
-    res.json({ ok: true });
+  // POST /api/auth/register|login|logout — handled by Supabase on the client.
+  app.post(['/api/auth/register', '/api/auth/login', '/api/auth/logout'], (req, res) => {
+    res.status(410).json({ ok: false, message: 'Use Supabase Auth (handled in the client).' });
   });
 
   // GET /api/auth/me — validate token and return the current user
@@ -78,9 +66,13 @@ function createApp() {
     res.json({ ok: true, username: req.username });
   });
 
-  // GET /api/auth/config — public registration state (for the login UI)
+  // GET /api/auth/config — public config the login UI needs (Supabase project).
   app.get('/api/auth/config', (req, res) => {
-    res.json({ registrationOpen: auth.isRegistrationOpen() });
+    res.json({
+      provider: 'supabase',
+      supabaseUrl: auth.supabaseConfig.SUPABASE_URL,
+      supabaseAnonKey: auth.supabaseConfig.SUPABASE_ANON_KEY,
+    });
   });
 
   // Serve static files from src/public (login + app UI are public assets;
@@ -352,10 +344,10 @@ function sendJSON(ws, data) {
  * Set up WebSocket server event handlers.
  */
 function setupWebSocket() {
-  wss.on('connection', (ws, req) => {
+  wss.on('connection', async (ws, req) => {
     const clientIP = req.socket.remoteAddress;
 
-    // Require a valid session token (passed as ?token=... on the WS URL).
+    // Require a valid Supabase token (passed as ?token=... on the WS URL).
     // Reject unauthenticated upgrades before doing anything else.
     let token = null;
     try {
@@ -363,7 +355,7 @@ function setupWebSocket() {
     } catch (err) {
       token = null;
     }
-    const username = auth.verifyToken(token);
+    const username = await auth.verifyToken(token);
     if (!username) {
       console.warn(`[server] Rejected unauthenticated WebSocket from ${clientIP}`);
       try { ws.close(4401, 'unauthorized'); } catch (e) {}

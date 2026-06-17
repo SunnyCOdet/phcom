@@ -1,7 +1,9 @@
 const { app, BrowserWindow, ipcMain, clipboard, Tray, Menu, nativeImage, dialog, desktopCapturer, screen, systemPreferences } = require('electron');
 const path = require('path');
 const { startServer, stopServer, getStatus, sendRTCToClient, setCaptureSignalHandler } = require('./src/server/index');
-const { getLocalIP, generateQRCode, startMDNS, stopMDNS, startTunnel, getTunnelUrl } = require('./src/server/network');
+const { getLocalIP, generateQRCode, startMDNS, stopMDNS } = require('./src/server/network');
+const inputController = require('./src/server/input-controller');
+const supabaseConfig = require('./src/server/supabase-config');
 
 const PORT = 7898;
 let mainWindow = null;
@@ -9,7 +11,7 @@ let tray = null;
 let serverInstance = null;
 let localIP = '';
 let connectionURL = '';
-let tunnelURL = '';
+let remoteURL = '';   // public Supabase relay URL (from the register-session edge function)
 let isQuitting = false;
 
 // ─── Create QR Code Window ──────────────────────────────────────────────────
@@ -55,12 +57,12 @@ function createTray() {
   );
 
   tray = new Tray(icon);
-  const displayURL = tunnelURL || connectionURL;
+  const displayURL = remoteURL || connectionURL;
   tray.setToolTip(`pcphone - ${displayURL}`);
 
   const updateContextMenu = () => {
     const status = getStatus();
-    const activeURL = tunnelURL || connectionURL;
+    const activeURL = remoteURL || connectionURL;
     const contextMenu = Menu.buildFromTemplate([
       {
         label: `🖥️  pcphone`,
@@ -73,11 +75,11 @@ function createTray() {
           clipboard.writeText(activeURL);
         }
       },
-      ...(tunnelURL ? [{
-        label: `🌐  Tunnel: Active`,
+      ...(remoteURL ? [{
+        label: `🌐  Supabase relay: Active`,
         enabled: false
       }] : [{
-        label: `⚠️  Local only: ${connectionURL}`,
+        label: `⚠️  Sign in on the QR window to enable remote access`,
         enabled: false
       }]),
       {
@@ -225,18 +227,58 @@ function setupIPC() {
   });
 
   ipcMain.handle('get-connection-info', async () => {
-    // Prioritize the fast local Wi-Fi link over the tunnel for the QR code
-    const primaryURL = connectionURL || tunnelURL;
+    // The remote Supabase relay URL is the shareable one; fall back to LAN.
+    const primaryURL = remoteURL || connectionURL;
     const qrCode = await generateQRCode(primaryURL);
     return {
       ip: localIP,
       port: PORT,
       url: connectionURL,
-      tunnelUrl: tunnelURL,
+      remoteUrl: remoteURL,
       primaryUrl: primaryURL,
       qrCode: qrCode,
       mdnsUrl: `http://my-pc.local:${PORT}`
     };
+  });
+
+  // Renderer hands us the public relay URL after registering with Supabase.
+  // We regenerate the QR for it and refresh the tray.
+  ipcMain.handle('set-remote-url', async (event, info) => {
+    remoteURL = (info && info.url) || '';
+    console.log(`[main] Remote relay URL set: ${remoteURL || '(none)'}`);
+    const qrCode = remoteURL ? await generateQRCode(remoteURL) : null;
+    return { qrCode };
+  });
+
+  // Expose Supabase config (project URL + publishable key) to the renderer.
+  ipcMain.handle('get-supabase-config', () => ({
+    url: supabaseConfig.SUPABASE_URL,
+    anonKey: supabaseConfig.SUPABASE_ANON_KEY,
+    functionsUrl: supabaseConfig.functionsUrl,
+    registerSessionUrl: supabaseConfig.registerSessionUrl,
+    appUrl: supabaseConfig.appUrl,
+    webAppUrl: supabaseConfig.webAppUrl
+  }));
+
+  // Input from a remote phone, relayed over the WebRTC data channel. Coordinates
+  // are normalized (0..1); moveMouseAbsolute already expects normalized values.
+  ipcMain.on('remote-input', async (event, msg) => {
+    if (!msg || typeof msg.t !== 'string') return;
+    try {
+      switch (msg.t) {
+        case 'move': await inputController.moveMouseAbsolute(msg.nx || 0, msg.ny || 0); break;
+        case 'click': await inputController.leftClick(); break;
+        case 'dblclick': await inputController.doubleClick(); break;
+        case 'rightclick': await inputController.rightClick(); break;
+        case 'scroll': await inputController.scroll(msg.dx || 0, msg.dy || 0); break;
+        case 'text': await inputController.typeText(msg.text || ''); break;
+        case 'key': await inputController.pressKey(msg.key || ''); break;
+        case 'hotkey': await inputController.hotkey(msg.modifiers || [], msg.key || ''); break;
+        default: break;
+      }
+    } catch (err) {
+      console.error('[main] remote-input error:', err.message);
+    }
   });
 
   ipcMain.handle('get-status', () => {
@@ -327,14 +369,10 @@ async function startup() {
     startMDNS(PORT);
     console.log(`[pcphone] ✅ mDNS advertised as my-pc.local:${PORT}`);
 
-    // Start localtunnel
-    console.log('[pcphone] Starting tunnel...');
-    tunnelURL = await startTunnel(PORT);
-    if (tunnelURL) {
-      console.log(`[pcphone] ✅ Tunnel URL: ${tunnelURL}`);
-    } else {
-      console.log('[pcphone] ⚠️  Tunnel failed - using local network only');
-    }
+    // Remote access is now provided by the Supabase relay instead of localtunnel.
+    // The QR window signs the host into Supabase, calls the register-session edge
+    // function, and reports the public URL back via the 'set-remote-url' IPC.
+    console.log('[pcphone] Remote access via Supabase relay — sign in on the QR window.');
 
     // Create window and tray
     console.log('[pcphone] Creating window and tray...');

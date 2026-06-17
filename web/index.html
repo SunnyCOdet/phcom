@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="theme-color" content="#0b0b0d" />
+<title>pcphone remote</title>
+<style>
+  :root{--bg:#0b0b0d;--surface:rgba(255,255,255,.06);--surface2:rgba(255,255,255,.1);--line:rgba(255,255,255,.12);--text:#f4f4f5;--muted:#a1a1aa;--accent:#39ff14;--danger:#f87171;}
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;overflow:hidden;}
+  .center{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;z-index:10;}
+  h1{font-size:24px;font-weight:700;letter-spacing:-.02em;}
+  h1 .a{color:var(--accent);}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:6px;text-align:center;}
+  input{width:100%;max-width:320px;padding:14px;border-radius:11px;border:1px solid var(--line);background:var(--surface);color:var(--text);font-size:16px;}
+  input:focus{outline:none;border-color:var(--accent);}
+  button{cursor:pointer;border:none;border-radius:11px;font-size:15px;font-weight:600;padding:14px 16px;color:var(--text);}
+  .primary{background:var(--accent);color:#07140a;width:100%;max-width:320px;}
+  .ghost{background:transparent;color:var(--muted);font-weight:500;}
+  .row{display:flex;gap:8px;width:100%;max-width:320px;}
+  .row button{flex:1;}
+  .msg{color:var(--danger);font-size:13px;min-height:18px;text-align:center;max-width:320px;}
+  .msg.ok{color:var(--accent);}
+  .card{width:100%;max-width:320px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;}
+  .card:hover{background:var(--surface2);}
+  .card .name{font-weight:600;}
+  .card .code{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--muted);font-size:12px;}
+  #stage{position:fixed;inset:0;display:none;background:#000;}
+  video{width:100%;height:100%;object-fit:contain;background:#000;touch-action:none;}
+  #bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px;background:linear-gradient(transparent,rgba(0,0,0,.6));z-index:5;}
+  #bar button{flex:1;background:var(--surface);border:1px solid var(--line);padding:11px 6px;font-size:12px;}
+  #bar button:active{background:var(--surface2);}
+  #status{position:fixed;top:8px;left:8px;font-size:11px;color:var(--muted);background:rgba(0,0,0,.55);padding:5px 9px;border-radius:7px;z-index:6;}
+  #signout{position:fixed;top:8px;right:8px;font-size:11px;color:var(--muted);background:rgba(0,0,0,.55);padding:5px 9px;border-radius:7px;z-index:6;border:none;}
+  #hidden-input{position:fixed;opacity:0;height:1px;width:1px;top:-100px;}
+  .hidden{display:none!important;}
+</style>
+</head>
+<body>
+  <!-- Login -->
+  <div id="login" class="center">
+    <h1>pc<span class="a">phone</span> remote</h1>
+    <div class="sub">Sign in with your pcphone account.</div>
+    <input id="email" type="email" placeholder="Email" autocomplete="username" />
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
+    <button class="primary" id="btn-login">Sign in</button>
+    <button class="ghost" id="btn-signup">Create account</button>
+    <div class="msg" id="login-msg"></div>
+  </div>
+
+  <!-- Session picker -->
+  <div id="picker" class="center hidden">
+    <h1>Your PCs</h1>
+    <div class="sub" id="picker-sub">Pick a PC to control.</div>
+    <div id="session-list" style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:8px;"></div>
+    <div class="row" style="margin-top:6px;">
+      <button class="ghost" id="btn-refresh">Refresh</button>
+      <button class="ghost" id="btn-signout-2">Sign out</button>
+    </div>
+    <div class="msg" id="picker-msg"></div>
+  </div>
+
+  <!-- Stage -->
+  <div id="stage">
+    <div id="status">idle</div>
+    <button id="signout">Exit</button>
+    <video id="video" autoplay playsinline></video>
+    <input id="hidden-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+    <div id="bar">
+      <button id="b-right">Right-click</button>
+      <button id="b-keys">Keyboard</button>
+      <button id="b-up">Scroll ▲</button>
+      <button id="b-down">Scroll ▼</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+    // ── Config (public — safe to ship; RLS governs access) ──────────────────
+    const SUPABASE_URL = "https://yqbkdajkvjxqwcmlxtja.supabase.co";
+    const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlxYmtkYWprdmp4cXdjbWx4dGphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MTMwMjQsImV4cCI6MjA5NzI4OTAyNH0.KjLOR2ihEFm-axJYLtM7eRoGT-y7EnVvhul7bFGQuxw";
+
+    const sb = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
+    const $ = (id) => document.getElementById(id);
+    const params = new URLSearchParams(location.search);
+    const peerId = "v_" + Math.random().toString(36).slice(2, 10);
+
+    const show = (which) => {
+      $("login").classList.toggle("hidden", which !== "login");
+      $("picker").classList.toggle("hidden", which !== "picker");
+      $("stage").style.display = which === "stage" ? "block" : "none";
+    };
+    const setMsg = (el, t, ok) => { const m = $(el); m.textContent = t || ""; m.className = "msg" + (ok ? " ok" : ""); };
+    const setStatus = (t) => { $("status").textContent = t; };
+
+    // ── Auth ────────────────────────────────────────────────────────────────
+    $("btn-login").onclick = async () => {
+      setMsg("login-msg", "Signing in…");
+      const { error } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("password").value });
+      if (error) return setMsg("login-msg", error.message);
+      afterLogin();
+    };
+    $("btn-signup").onclick = async () => {
+      setMsg("login-msg", "Creating account…");
+      const { data, error } = await sb.auth.signUp({ email: $("email").value.trim(), password: $("password").value });
+      if (error) return setMsg("login-msg", error.message);
+      if (!data.session) return setMsg("login-msg", "Account created. If confirmation is on, confirm then sign in.", true);
+      afterLogin();
+    };
+    const signOut = async () => { try { await sb.auth.signOut(); } catch (e) {} cleanup(); show("login"); };
+    $("signout").onclick = signOut;
+    $("btn-signout-2").onclick = signOut;
+    $("btn-refresh").onclick = () => loadSessions();
+
+    sb.auth.getSession().then(({ data }) => { if (data.session) afterLogin(); else show("login"); });
+
+    async function afterLogin() {
+      // If a room is pinned in the URL, go straight in.
+      const room = (params.get("room") || "").toUpperCase();
+      if (room) return connect(room);
+      await loadSessions();
+    }
+
+    async function loadSessions() {
+      show("picker");
+      setMsg("picker-msg", "");
+      const { data, error } = await sb
+        .from("sessions")
+        .select("room_code, host_name, status, last_seen_at")
+        .eq("status", "online")
+        .order("last_seen_at", { ascending: false });
+      if (error) { setMsg("picker-msg", error.message); return; }
+      const list = $("session-list");
+      list.innerHTML = "";
+      if (!data || data.length === 0) {
+        $("picker-sub").textContent = "No PCs online. Start pcphone on your PC and sign in there.";
+        return;
+      }
+      if (data.length === 1) return connect(data[0].room_code); // auto-connect the only one
+      $("picker-sub").textContent = "Pick a PC to control.";
+      for (const s of data) {
+        const el = document.createElement("div");
+        el.className = "card";
+        el.innerHTML = `<div><div class="name">${(s.host_name || "PC")}</div><div class="code">${s.room_code}</div></div><div>›</div>`;
+        el.onclick = () => connect(s.room_code);
+        list.appendChild(el);
+      }
+    }
+
+    // ── WebRTC viewer ─────────────────────────────────────────────────────────
+    let pc = null, channel = null, dc = null, currentRoom = null;
+    const video = $("video");
+
+    function cleanup() {
+      try { if (pc) pc.close(); } catch (e) {}
+      try { if (channel) sb.removeChannel(channel); } catch (e) {}
+      pc = null; channel = null; dc = null; video.srcObject = null;
+    }
+
+    async function connect(room) {
+      cleanup();
+      currentRoom = room;
+      show("stage");
+      setStatus("joining " + room + "…");
+      channel = sb.channel("room:" + room, { config: { broadcast: { self: false } } });
+      channel
+        .on("broadcast", { event: "offer" }, ({ payload }) => { if (payload.to === peerId) onOffer(payload); })
+        .on("broadcast", { event: "ice" }, ({ payload }) => { if (payload.to === peerId && payload.role === "host") onRemoteIce(payload.candidate); })
+        .subscribe((s) => { if (s === "SUBSCRIBED") { setStatus("waiting for PC…"); send("join", { peerId }); } });
+    }
+    function send(event, payload) { if (channel) channel.send({ type: "broadcast", event, payload }); }
+
+    async function onOffer(payload) {
+      setStatus("connecting…");
+      pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      pc.ontrack = (e) => { if (video.srcObject !== e.streams[0]) video.srcObject = e.streams[0]; };
+      pc.ondatachannel = (e) => { dc = e.channel; dc.onopen = () => setStatus("connected"); };
+      pc.onicecandidate = (e) => { if (e.candidate) send("ice", { to: "host", from: peerId, peerId, role: "viewer", candidate: e.candidate }); };
+      pc.onconnectionstatechange = () => { setStatus(pc.connectionState); if (pc.connectionState === "failed") setStatus("connection failed — try Exit & reconnect"); };
+      await pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      send("answer", { to: "host", peerId, sdp: answer.sdp });
+    }
+    async function onRemoteIce(c) { try { if (pc && c) await pc.addIceCandidate(c); } catch (e) {} }
+
+    // ── Input (phone → PC over the data channel) ──────────────────────────────
+    function di(obj) { if (dc && dc.readyState === "open") dc.send(JSON.stringify(obj)); }
+    function norm(ev) {
+      const r = video.getBoundingClientRect();
+      const vw = video.videoWidth || r.width, vh = video.videoHeight || r.height;
+      const scale = Math.min(r.width / vw, r.height / vh);
+      const dw = vw * scale, dh = vh * scale;
+      const ox = (r.width - dw) / 2, oy = (r.height - dh) / 2;
+      const px = (ev.clientX - r.left - ox) / dw, py = (ev.clientY - r.top - oy) / dh;
+      return { nx: Math.max(0, Math.min(1, px)), ny: Math.max(0, Math.min(1, py)) };
+    }
+    let downPt = null, moved = false, lastTap = 0;
+    video.addEventListener("pointerdown", (e) => { downPt = norm(e); moved = false; di({ t: "move", ...downPt }); });
+    video.addEventListener("pointermove", (e) => { if (!downPt) return; const p = norm(e); if (Math.hypot(p.nx - downPt.nx, p.ny - downPt.ny) > 0.01) moved = true; di({ t: "move", ...p }); });
+    video.addEventListener("pointerup", (e) => {
+      if (!downPt) return; const p = norm(e); di({ t: "move", ...p });
+      if (!moved) { const now = Date.now(); di({ t: now - lastTap < 280 ? "dblclick" : "click" }); lastTap = now; }
+      downPt = null;
+    });
+    $("b-right").onclick = () => di({ t: "rightclick" });
+    $("b-up").onclick = () => di({ t: "scroll", dy: -300 });
+    $("b-down").onclick = () => di({ t: "scroll", dy: 300 });
+    const hi = $("hidden-input");
+    $("b-keys").onclick = () => hi.focus();
+    hi.addEventListener("input", () => { if (hi.value) { di({ t: "text", text: hi.value }); hi.value = ""; } });
+    hi.addEventListener("keydown", (e) => {
+      if (["Backspace", "Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) { di({ t: "key", key: e.key }); e.preventDefault(); }
+    });
+  </script>
+</body>
+</html>

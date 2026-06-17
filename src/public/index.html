@@ -24,7 +24,7 @@
       <div class="auth-brand">pcphone</div>
       <div class="auth-subtitle" id="auth-subtitle">Sign in to control this PC</div>
       <form id="auth-form" autocomplete="off">
-        <input id="auth-username" class="auth-input" type="text" placeholder="Username"
+        <input id="auth-username" class="auth-input" type="email" placeholder="Email"
                autocapitalize="none" autocorrect="off" spellcheck="false" required>
         <input id="auth-password" class="auth-input" type="password" placeholder="Password"
                autocomplete="current-password" required>
@@ -312,6 +312,7 @@
   <!-- Toast Container -->
   <div id="toast-container"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="index.js"></script>
 </body>
 </html>

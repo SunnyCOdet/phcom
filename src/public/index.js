@@ -90,9 +90,10 @@
   let heartbeatTimer = null;
   let isConnected = false;
 
-  // Auth
+  // Auth (Supabase)
   let authToken = localStorage.getItem('pcphone_token') || null;
   let authMode = 'login'; // 'login' | 'register'
+  let sb = null; // Supabase client (created once config is fetched)
 
   // FPS tracking
   let frameCount = 0;
@@ -215,39 +216,65 @@
   // Force re-authentication: drop token, close socket, show the login screen.
   function requireLogin(message) {
     setToken(null);
+    if (sb) { try { sb.auth.signOut(); } catch (e) {} }
     if (ws) { try { ws.close(); } catch (e) {} }
     setAuthMode('login');
     showAuth(message);
   }
 
+  // Create the Supabase client from server-provided config (idempotent).
+  async function ensureSupabase() {
+    if (sb) return sb;
+    if (!window.supabase || !window.supabase.createClient) {
+      throw new Error('Supabase library not loaded');
+    }
+    const res = await fetch('/api/auth/config');
+    const cfg = await res.json();
+    if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) {
+      throw new Error('Missing Supabase config');
+    }
+    sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
+      auth: { persistSession: true, autoRefreshToken: true },
+    });
+    // Keep the stored token in sync with Supabase token refreshes so WS
+    // reconnects always use a valid access token.
+    sb.auth.onAuthStateChange((_event, session) => {
+      setToken(session ? session.access_token : null);
+    });
+    return sb;
+  }
+
   async function submitAuth(e) {
     if (e) e.preventDefault();
-    const username = dom.authUsername.value.trim();
+    const email = dom.authUsername.value.trim();
     const password = dom.authPassword.value;
-    if (!username || !password) {
-      showAuth('Enter a username and password');
+    if (!email || !password) {
+      showAuth('Enter an email and password');
       return;
     }
     dom.authSubmit.disabled = true;
-    const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
     try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.token) {
-        setToken(data.token);
-        dom.authPassword.value = '';
-        hideAuth();
-        showToast(authMode === 'register' ? 'Account created' : 'Signed in', 'success');
-        connect();
+      await ensureSupabase();
+      if (authMode === 'register') {
+        const { data, error } = await sb.auth.signUp({ email, password });
+        if (error) { showAuth(error.message); return; }
+        if (!data.session) {
+          showAuth('Account created. Confirm your email (if required), then sign in.');
+          setAuthMode('login');
+          return;
+        }
+        setToken(data.session.access_token);
       } else {
-        showAuth(data.message || 'Authentication failed');
+        const { data, error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) { showAuth(error.message); return; }
+        setToken(data.session.access_token);
       }
+      dom.authPassword.value = '';
+      hideAuth();
+      showToast(authMode === 'register' ? 'Account created' : 'Signed in', 'success');
+      connect();
     } catch (err) {
-      showAuth('Network error — is the PC reachable?');
+      showAuth(err.message || 'Network error — is the PC reachable?');
     } finally {
       dom.authSubmit.disabled = false;
     }
@@ -260,17 +287,19 @@
     });
   }
 
-  // Validate a stored token against the server.
+  // Resume a persisted Supabase session if present, refreshing the token.
   async function verifyExistingToken() {
-    if (!authToken) return false;
     try {
-      const res = await fetch('/api/auth/me', {
-        headers: { 'Authorization': 'Bearer ' + authToken },
-      });
-      return res.ok;
+      await ensureSupabase();
+      const { data } = await sb.auth.getSession();
+      if (data.session) {
+        setToken(data.session.access_token);
+        return true;
+      }
     } catch (e) {
-      return false;
+      console.warn('[Auth] verifyExistingToken:', e.message);
     }
+    return false;
   }
 
   // fetch wrapper that attaches the auth token and handles 401 by re-prompting.

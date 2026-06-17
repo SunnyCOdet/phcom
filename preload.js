@@ -23,5 +23,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendLog: (msg) => ipcRenderer.send('renderer-log', msg),
   onCaptureTick: (callback) => {
     ipcRenderer.on('capture-tick', () => callback());
-  }
+  },
+
+  // --- Supabase remote relay ---
+  // Config (project URL + publishable key + edge function URLs) for the renderer.
+  getSupabaseConfig: () => ipcRenderer.invoke('get-supabase-config'),
+  // Renderer reports the public remote URL (from register-session) for the tray/QR.
+  setRemoteUrl: (info) => ipcRenderer.invoke('set-remote-url', info),
+  // Input received from a remote phone over the WebRTC data channel.
+  sendRemoteInput: (msg) => ipcRenderer.send('remote-input', msg)
 });

@@ -1226,6 +1226,187 @@
         });
       });
     }
+
+    // Bridge so the Supabase relay module (separate ES module scope) can reuse
+    // the capture pipeline defined in this classic script.
+    window.__pcphone = {
+      ensureCapture: async () => {
+        await startScreenCapture();
+        // Give getUserMedia a tick to populate tracks if just started.
+        for (let i = 0; i < 50 && !streamInstance; i++) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        return !!streamInstance;
+      },
+      getStream: () => streamInstance,
+      getCaptureSettings: () => captureSettings,
+      applyRTCSenderQuality: (sender) => applyRTCSenderQuality(sender),
+      preferHighQualityCodec: (sdp) => preferHighQualityCodec(sdp),
+      log,
+    };
+  </script>
+
+  <!-- ── Supabase remote relay (auth + signaling + WebRTC offer to phones) ── -->
+  <div id="relay-login" style="position:fixed;inset:0;background:rgba(11,11,13,0.97);z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:28px;-webkit-app-region:no-drag;">
+    <div style="font-family:var(--font-display);font-size:18px;color:var(--text-1);">Sign in for remote access</div>
+    <div style="font-size:11px;color:var(--text-3);margin-bottom:6px;text-align:center;">Uses your Supabase account. Phones sign in with the same account.</div>
+    <input id="relay-email" type="email" placeholder="Email" style="width:100%;max-width:280px;padding:11px 12px;border-radius:9px;border:1px solid var(--line);background:var(--surface-1);color:var(--text-1);font-size:13px;-webkit-app-region:no-drag;" />
+    <input id="relay-password" type="password" placeholder="Password" style="width:100%;max-width:280px;padding:11px 12px;border-radius:9px;border:1px solid var(--line);background:var(--surface-1);color:var(--text-1);font-size:13px;-webkit-app-region:no-drag;" />
+    <button id="relay-signin" style="width:100%;max-width:280px;padding:11px;border-radius:9px;border:none;background:var(--accent);color:#07140a;font-weight:600;font-size:13px;cursor:pointer;-webkit-app-region:no-drag;">Sign in</button>
+    <button id="relay-signup" style="background:transparent;border:none;color:var(--text-3);font-size:12px;cursor:pointer;-webkit-app-region:no-drag;">Create account</button>
+    <div id="relay-msg" style="font-size:11px;color:#f87171;min-height:16px;text-align:center;"></div>
+    <button id="relay-skip" style="background:transparent;border:none;color:var(--text-3);font-size:11px;cursor:pointer;margin-top:6px;-webkit-app-region:no-drag;">Skip — local network only</button>
+  </div>
+
+  <script type="module">
+    import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+    const B = window.__pcphone;
+    const api = window.electronAPI;
+    const $ = (id) => document.getElementById(id);
+    const setMsg = (t, ok) => { const m = $('relay-msg'); if (m) { m.textContent = t; m.style.color = ok ? 'var(--accent)' : '#f87171'; } };
+
+    let sb = null;
+    let channel = null;
+    const remotePeers = new Map(); // peerId -> RTCPeerConnection
+
+    async function initSupabase() {
+      const cfg = await api.getSupabaseConfig();
+      sb = createClient(cfg.url, cfg.anonKey, { auth: { persistSession: true } });
+      window.__sbCfg = cfg;
+      // Auto-resume an existing session.
+      const { data } = await sb.auth.getSession();
+      if (data.session) onAuthed();
+    }
+
+    $('relay-signin').onclick = async () => {
+      setMsg('Signing in…');
+      const { error } = await sb.auth.signInWithPassword({ email: $('relay-email').value.trim(), password: $('relay-password').value });
+      if (error) return setMsg(error.message);
+      onAuthed();
+    };
+    $('relay-signup').onclick = async () => {
+      setMsg('Creating account…');
+      const { error } = await sb.auth.signUp({ email: $('relay-email').value.trim(), password: $('relay-password').value });
+      if (error) return setMsg(error.message);
+      setMsg('Account created. If email confirmation is on, confirm then sign in.', true);
+    };
+    $('relay-skip').onclick = () => { $('relay-login').style.display = 'none'; };
+
+    async function onAuthed() {
+      $('relay-login').style.display = 'none';
+      try {
+        await registerAndAdvertise();
+      } catch (err) {
+        B.log('[Relay] Registration failed: ' + err.message);
+      }
+    }
+
+    async function registerAndAdvertise() {
+      const cfg = window.__sbCfg;
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) throw new Error('No session');
+
+      const resp = await fetch(cfg.registerSessionUrl, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + session.access_token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host_name: 'pcphone host' }),
+      });
+      const out = await resp.json();
+      if (!resp.ok || !out.ok) throw new Error(out.error || 'register-session failed');
+
+      // Prefer the configured web client (e.g. the Vercel deployment) for the
+      // shareable URL; fall back to the edge-function page from register-session.
+      const displayUrl = cfg.webAppUrl
+        ? cfg.webAppUrl + (cfg.webAppUrl.includes('?') ? '&' : '?') + 'room=' + out.room_code
+        : out.url;
+      B.log('[Relay] Registered room ' + out.room_code + ' → ' + displayUrl);
+
+      // Show the relay URL + QR via the tray/main and update the QR window UI.
+      const { qrCode } = await api.setRemoteUrl({ url: displayUrl });
+      if (qrCode) $('qr-image').src = qrCode;
+      const primaryRow = $('primary-url-row');
+      primaryRow.style.display = '';
+      $('primary-url-value').textContent = displayUrl;
+      primaryRow.onclick = () => copyToClipboard(displayUrl);
+      const badge = $('tunnel-badge'); const btext = $('tunnel-text');
+      badge.className = 'tunnel-badge active'; btext.textContent = 'Supabase relay active';
+
+      joinChannel(out.room_code);
+      // Refresh the session row periodically so it stays "online".
+      setInterval(() => {
+        fetch(cfg.registerSessionUrl, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + session.access_token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room_code: out.room_code, host_name: 'pcphone host' }),
+        }).catch(() => {});
+      }, 60000);
+    }
+
+    function chSend(event, payload) {
+      if (channel) channel.send({ type: 'broadcast', event, payload });
+    }
+
+    function joinChannel(roomCode) {
+      channel = sb.channel('room:' + roomCode, { config: { broadcast: { self: false } } });
+      channel
+        .on('broadcast', { event: 'join' }, ({ payload }) => onViewerJoin(payload.peerId))
+        .on('broadcast', { event: 'answer' }, ({ payload }) => onAnswer(payload))
+        .on('broadcast', { event: 'ice' }, ({ payload }) => { if (payload.role === 'viewer') onViewerIce(payload); })
+        .subscribe((s) => B.log('[Relay] Channel ' + roomCode + ': ' + s));
+    }
+
+    async function onViewerJoin(peerId) {
+      if (!peerId) return;
+      B.log('[Relay] Viewer joined: ' + peerId);
+      const ok = await B.ensureCapture();
+      if (!ok) { B.log('[Relay] No capture stream available'); return; }
+
+      closeRemotePeer(peerId);
+      const stream = B.getStream();
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      remotePeers.set(peerId, pc);
+
+      pc.onicecandidate = (e) => { if (e.candidate) chSend('ice', { to: peerId, role: 'host', candidate: e.candidate }); };
+      pc.onconnectionstatechange = () => {
+        B.log('[Relay] Peer ' + peerId + ': ' + pc.connectionState);
+        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) closeRemotePeer(peerId);
+      };
+
+      // Data channel carries phone → PC input.
+      const dc = pc.createDataChannel('input');
+      dc.onmessage = (e) => {
+        try { api.sendRemoteInput(JSON.parse(e.data)); } catch (err) {}
+      };
+
+      stream.getVideoTracks().forEach((t) => { t.contentHint = 'detail'; const s = pc.addTrack(t, stream); B.applyRTCSenderQuality(s); });
+      stream.getAudioTracks().forEach((t) => pc.addTrack(t, stream));
+
+      const offer = await pc.createOffer({ offerToReceiveVideo: false, offerToReceiveAudio: false });
+      const sdp = B.preferHighQualityCodec(offer.sdp);
+      await pc.setLocalDescription({ type: 'offer', sdp });
+      chSend('offer', { to: peerId, sdp });
+      B.log('[Relay] Offer sent to ' + peerId);
+    }
+
+    async function onAnswer(payload) {
+      const pc = remotePeers.get(payload.peerId);
+      if (pc && payload.sdp) {
+        await pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
+        B.log('[Relay] Answer applied from ' + payload.peerId);
+      }
+    }
+    async function onViewerIce(payload) {
+      const pc = remotePeers.get(payload.from || payload.peerId);
+      try { if (pc && payload.candidate) await pc.addIceCandidate(payload.candidate); } catch (e) {}
+    }
+
+    function closeRemotePeer(peerId) {
+      const pc = remotePeers.get(peerId);
+      if (pc) { try { pc.close(); } catch (e) {} remotePeers.delete(peerId); }
+    }
+
+    initSupabase().catch((err) => B.log('[Relay] init error: ' + err.message));
   </script>
 </body>
 </html>
