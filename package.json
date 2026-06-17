@@ -1,6 +1,6 @@
 {
   "name": "pcphone",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "pcphone — control your PC from any phone over the web",
   "main": "main.js",
   "scripts": {

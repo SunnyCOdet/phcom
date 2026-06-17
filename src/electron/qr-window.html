@@ -1039,38 +1039,62 @@
         }
         console.log('[Capture] Source ID:', sourceId);
 
-        // Capture video + system audio in the same stream for perfect A/V sync
-        const constraints = {
-          audio: {
-            mandatory: {
-              chromeMediaSource: 'desktop'
-            }
-          },
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId,
-              minWidth: captureWidth,
-              maxWidth: captureWidth,
-              minHeight: captureHeight,
-              maxHeight: captureHeight,
-              minFrameRate: 30,
-              maxFrameRate: captureSettings.maxFps
-            }
+        // Build desktop video constraints. The STRICT variant pins an exact
+        // resolution + minimum frame rate, which works on Windows. macOS/Linux
+        // desktop capture frequently cannot satisfy exact min==max resolution or
+        // minFrameRate and throws OverconstrainedError, producing no frames at
+        // all — so we also try a RELAXED variant (max-only, no minFrameRate).
+        const strictVideo = {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            minWidth: captureWidth,
+            maxWidth: captureWidth,
+            minHeight: captureHeight,
+            maxHeight: captureHeight,
+            minFrameRate: 30,
+            maxFrameRate: captureSettings.maxFps
           }
         };
-        log('[Capture] getUserMedia constraints (audio+video): ' + JSON.stringify(constraints));
+        const relaxedVideo = {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            maxWidth: captureWidth,
+            maxHeight: captureHeight,
+            maxFrameRate: captureSettings.maxFps
+          }
+        };
+        const desktopAudio = { mandatory: { chromeMediaSource: 'desktop' } };
 
-        try {
-          streamInstance = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch (avErr) {
-          // If audio+video fails, fall back to video-only
-          log('[Capture] ⚠️ Audio+video capture failed (' + avErr.message + '), falling back to video-only');
-          const videoOnlyConstraints = {
-            audio: false,
-            video: constraints.video
-          };
-          streamInstance = await navigator.mediaDevices.getUserMedia(videoOnlyConstraints);
+        // Try progressively more permissive constraint sets until one succeeds.
+        // Prefer audio+video (system audio only works on Windows), then video.
+        const attempts = [
+          { label: 'audio+video (strict)', constraints: { audio: desktopAudio, video: strictVideo } },
+          { label: 'video-only (strict)', constraints: { audio: false, video: strictVideo } },
+          { label: 'video-only (relaxed)', constraints: { audio: false, video: relaxedVideo } }
+        ];
+
+        streamInstance = null;
+        let lastErr = null;
+        for (const attempt of attempts) {
+          try {
+            log('[Capture] Trying getUserMedia: ' + attempt.label);
+            streamInstance = await navigator.mediaDevices.getUserMedia(attempt.constraints);
+            log('[Capture] ✅ getUserMedia succeeded with ' + attempt.label);
+            break;
+          } catch (err) {
+            lastErr = err;
+            log('[Capture] ⚠️ ' + attempt.label + ' failed: ' + err.name + ' - ' + err.message);
+          }
+        }
+
+        if (!streamInstance) {
+          const isMac = (navigator.platform || '').toLowerCase().includes('mac');
+          const hint = isMac
+            ? ' On macOS, enable Screen Recording for pcphone (System Settings → Privacy & Security → Screen Recording), then fully quit and reopen the app.'
+            : '';
+          throw new Error('Screen capture failed: ' + (lastErr ? lastErr.message : 'unknown error') + '.' + hint);
         }
 
         const videoTracks = streamInstance.getVideoTracks();
