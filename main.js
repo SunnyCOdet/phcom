@@ -140,10 +140,15 @@ function createTray() {
 // ─── IPC Handlers ───────────────────────────────────────────────────────────
 function setupIPC() {
   let captureInterval = null;
+  let frameIpcCount = 0;
+  let lastFrameIpcLog = Date.now();
+
+  console.log('[main] Setting up IPC handlers...');
 
   ipcMain.on('start-capture-timer', (event, fps) => {
     if (captureInterval) clearInterval(captureInterval);
     const safeFps = Math.max(5, Math.min(Number(fps) || 60, 60));
+    console.log(`[main] Starting capture timer at ${safeFps} FPS (interval: ${(1000 / safeFps).toFixed(1)}ms)`);
     captureInterval = setInterval(() => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('capture-tick');
@@ -152,26 +157,43 @@ function setupIPC() {
   });
 
   ipcMain.on('stop-capture-timer', () => {
+    console.log('[main] Stopping capture timer');
     if (captureInterval) clearInterval(captureInterval);
+    captureInterval = null;
   });
+
   ipcMain.handle('get-primary-source-id', async () => {
     try {
       const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      console.log(`[main] Found ${sources.length} screen source(s):`, sources.map(s => s.id + ' (' + s.name + ')').join(', '));
       return sources.length > 0 ? sources[0].id : null;
     } catch (err) {
       console.error('[main] Failed to get desktop sources:', err.message);
+      console.error('[main] Stack:', err.stack);
       return null;
     }
   });
 
   ipcMain.on('new-frame', (event, arrayBuffer) => {
     const buffer = Buffer.from(arrayBuffer);
+    frameIpcCount++;
+    // Log frame IPC stats every 5 seconds
+    const now = Date.now();
+    if (now - lastFrameIpcLog >= 5000) {
+      console.log(`[main] Frame IPC: ${frameIpcCount} frames in 5s | Last frame size: ${(buffer.length / 1024).toFixed(1)} KB`);
+      frameIpcCount = 0;
+      lastFrameIpcLog = now;
+    }
     const screenCapture = require('./src/server/screen-capture');
     screenCapture.handleRendererFrame(buffer);
   });
 
   ipcMain.on('rtc-to-client', (event, message) => {
-    if (!message || !message.clientId) return;
+    if (!message || !message.clientId) {
+      console.warn('[main] rtc-to-client: missing clientId in message');
+      return;
+    }
+    console.log(`[main] RTC signal to client ${message.clientId}: ${message.type}`);
     sendRTCToClient(message.clientId, message);
   });
 
@@ -185,7 +207,7 @@ function setupIPC() {
     const logicalWidth = primaryDisplay.size.width;
     const logicalHeight = primaryDisplay.size.height;
 
-    return {
+    const info = {
       ...primaryDisplay.bounds,
       logicalWidth,
       logicalHeight,
@@ -193,6 +215,8 @@ function setupIPC() {
       height: Math.round(logicalHeight * scaleFactor),
       scaleFactor
     };
+    console.log('[main] Screen info:', JSON.stringify(info));
+    return info;
   });
 
   ipcMain.handle('get-connection-info', async () => {
@@ -235,8 +259,13 @@ function setupIPC() {
 // ─── Startup Sequence ───────────────────────────────────────────────────────
 async function startup() {
   try {
+    console.log('[Magical Newton] ========================================');
+    console.log('[Magical Newton] Starting Magical Newton Remote Desktop');
+    console.log('[Magical Newton] ========================================');
+
     // Setup IPC FIRST (before window creation)
     setupIPC();
+    console.log('[Magical Newton] IPC handlers registered');
 
     // Detect local IP
     localIP = getLocalIP();
@@ -245,30 +274,36 @@ async function startup() {
     console.log(`[Magical Newton] Connection URL: ${connectionURL}`);
 
     // Start web server
+    console.log(`[Magical Newton] Starting HTTP/WS server on port ${PORT}...`);
     serverInstance = await startServer(PORT);
     setCaptureSignalHandler((message) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
+        console.log(`[main] RTC signal from server to capture: ${message.type} for ${message.clientId || 'unknown'}`);
         mainWindow.webContents.send('rtc-to-capture', message);
+      } else {
+        console.warn('[main] Cannot forward RTC signal - mainWindow not available');
       }
     });
-    console.log(`[Magical Newton] Server started on port ${PORT}`);
+    console.log(`[Magical Newton] ✅ Server started on port ${PORT}`);
 
     // Start mDNS advertisement
     startMDNS(PORT);
-    console.log(`[Magical Newton] mDNS advertised as my-pc.local:${PORT}`);
+    console.log(`[Magical Newton] ✅ mDNS advertised as my-pc.local:${PORT}`);
 
     // Start localtunnel
     console.log('[Magical Newton] Starting tunnel...');
     tunnelURL = await startTunnel(PORT);
     if (tunnelURL) {
-      console.log(`[Magical Newton] 🌐 Tunnel URL: ${tunnelURL}`);
+      console.log(`[Magical Newton] ✅ Tunnel URL: ${tunnelURL}`);
     } else {
       console.log('[Magical Newton] ⚠️  Tunnel failed - using local network only');
     }
 
     // Create window and tray
+    console.log('[Magical Newton] Creating window and tray...');
     createWindow();
     createTray();
+    console.log('[Magical Newton] ✅ Window and tray created');
 
     // Start periodic status updates to renderer
     setInterval(() => {
@@ -277,9 +312,12 @@ async function startup() {
       }
     }, 1000);
 
-    console.log('[Magical Newton] Ready! Scan the QR code with your iPhone.');
+    console.log('[Magical Newton] ========================================');
+    console.log('[Magical Newton] ✅ Ready! Scan the QR code with your iPhone.');
+    console.log('[Magical Newton] ========================================');
   } catch (err) {
-    console.error('[Magical Newton] Startup error:', err);
+    console.error('[Magical Newton] ❌ Startup error:', err.message);
+    console.error('[Magical Newton] Stack:', err.stack);
     dialog.showErrorBox('Startup Error', err.message);
   }
 }
@@ -288,13 +326,15 @@ async function startup() {
 app.whenReady().then(startup);
 
 app.on('window-all-closed', (e) => {
-  // Don't quit on window close - keep running in tray
+  console.log('[Magical Newton] All windows closed - staying in tray');
 });
 
 app.on('before-quit', () => {
+  console.log('[Magical Newton] Application quitting...');
   isQuitting = true;
   stopMDNS();
   stopServer();
+  console.log('[Magical Newton] Cleanup complete');
 });
 
 app.on('activate', () => {

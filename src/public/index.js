@@ -101,17 +101,18 @@
 
   // Settings (load from localStorage)
   let sensitivity = parseFloat(localStorage.getItem('rd_sensitivity') || '1.5');
-  let quality = parseInt(localStorage.getItem('rd_quality') || '90', 10);
+  let quality = parseInt(localStorage.getItem('rd_quality') || '95', 10);
   let maxFps = parseInt(localStorage.getItem('rd_maxFps') || '60', 10);
   let controlMode = localStorage.getItem('rd_controlMode') || 'touch'; // 'touch' (Direct Touch) or 'trackpad'
 
-  if (localStorage.getItem('rd_stream_defaults_v2') !== '1') {
-    quality = Math.max(quality, 90);
+  if (localStorage.getItem('rd_stream_defaults_v3') !== '1') {
+    quality = Math.max(quality, 95);
     maxFps = Math.max(maxFps, 60);
     localStorage.setItem('rd_quality', quality);
     localStorage.setItem('rd_maxFps', maxFps);
-    localStorage.setItem('rd_stream_defaults_v2', '1');
+    localStorage.setItem('rd_stream_defaults_v3', '1');
   }
+  console.log('[Client] Stream settings loaded: quality=' + quality + ' maxFps=' + maxFps + ' sensitivity=' + sensitivity + ' controlMode=' + controlMode);
 
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 4;
@@ -164,16 +165,20 @@
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
+      console.log('[WS] Connection opened to', ws.url);
       isConnected = true;
       reconnectDelay = 1000;
       updateConnectionUI(true);
       startHeartbeat();
       sendStreamSettings();
+      console.log('[WS] Sent stream settings: quality=' + quality + ' maxFps=' + maxFps);
       send({ type: 'rtc-ready' });
+      console.log('[WS] Sent rtc-ready signal');
       showToast('Connected', 'success');
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      console.log('[WS] Connection closed. Code:', event.code, 'Reason:', event.reason || 'none', 'Clean:', event.wasClean);
       isConnected = false;
       updateConnectionUI(false);
       stopHeartbeat();
@@ -182,7 +187,8 @@
     };
 
     ws.onerror = (e) => {
-      console.error('[WS] Error:', e);
+      console.error('[WS] WebSocket error event:', e.type, e.message || '');
+      console.error('[WS] WebSocket state:', ws.readyState, '(0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)');
     };
 
     ws.onmessage = (event) => {
@@ -206,6 +212,7 @@
   }
 
   function sendStreamSettings() {
+    console.log('[Client] Sending stream settings to server: quality=' + quality + ' maxFps=' + maxFps);
     send({ type: 'settings', quality, maxFps });
   }
 
@@ -259,9 +266,11 @@
         }
         break;
       case 'rtc-offer':
-        console.log('[Stream] Received WebRTC offer');
+        console.log('[Stream] Received WebRTC offer, SDP length:', msg.offer?.sdp?.length || 0);
+        console.log('[Stream] Offer type:', msg.offer?.type);
         handleRTCOffer(msg).catch((err) => {
-          console.error('[RTC] Offer error:', err);
+          console.error('[RTC] Offer error:', err.message);
+          console.error('[RTC] Offer error stack:', err.stack);
         });
         break;
       case 'rtc-ice':
@@ -325,15 +334,23 @@
     rtcVideo.style.objectFit = 'contain';
     rtcVideo.style.opacity = '0';
     rtcVideo.style.pointerEvents = 'none';
+    rtcVideo.style.willChange = 'transform';
     dom.screenContainer.appendChild(rtcVideo);
+
+    // Apply current zoom state to the new video element
+    if (screenZoom.scale !== 1 || screenZoom.translateX !== 0 || screenZoom.translateY !== 0) {
+      applyScreenZoom();
+    }
 
     return rtcVideo;
   }
 
   function closeRTC() {
+    console.log('[RTC] Closing RTC peer connection. Was active:', rtcRenderActive);
     rtcRenderActive = false;
 
     if (rtcPeer) {
+      console.log('[RTC] Peer connection state before close:', rtcPeer.connectionState, 'ICE:', rtcPeer.iceConnectionState);
       rtcPeer.close();
       rtcPeer = null;
     }
@@ -378,23 +395,53 @@
     };
 
     peer.ontrack = (event) => {
+      console.log('[RTC] Received track:', event.track.kind, 'id:', event.track.id, 'readyState:', event.track.readyState);
+      const track = event.track;
+      const settings = track.getSettings ? track.getSettings() : {};
+      console.log('[RTC] Track settings:', JSON.stringify(settings));
       const video = createRTCVideo();
       video.srcObject = event.streams[0];
       video.play().catch((err) => {
         console.warn('[RTC] Video play blocked:', err.message);
       });
+      video.onloadedmetadata = () => {
+        console.log('[RTC] Video metadata loaded: ' + video.videoWidth + 'x' + video.videoHeight);
+      };
       startRTCRenderLoop();
     };
 
     peer.onconnectionstatechange = () => {
-      if (rtcPeer !== peer) return;
+      console.log('[RTC] Connection state changed:', peer.connectionState);
+      if (rtcPeer !== peer) {
+        console.log('[RTC] Stale peer, ignoring state change');
+        return;
+      }
 
       if (peer.connectionState === 'connected') {
-        console.log('[Stream] Using WebRTC stream');
+        console.log('[Stream] ✅ WebRTC stream CONNECTED - high quality stream active');
         send({ type: 'rtc-active' });
+        // Log the receiver stats
+        peer.getReceivers().forEach((receiver) => {
+          if (receiver.track) {
+            console.log('[RTC] Receiver track:', receiver.track.kind, 'enabled:', receiver.track.enabled, 'readyState:', receiver.track.readyState);
+          }
+        });
       } else if (['failed', 'closed'].includes(peer.connectionState)) {
+        console.warn('[RTC] ❌ Connection', peer.connectionState, '- falling back');
         closeRTC();
       }
+    };
+
+    peer.onicecandidateerror = (event) => {
+      console.warn('[RTC] ICE candidate error:', event.errorCode, event.errorText, 'url:', event.url);
+    };
+
+    peer.oniceconnectionstatechange = () => {
+      console.log('[RTC] ICE connection state:', peer.iceConnectionState);
+    };
+
+    peer.onicegatheringstatechange = () => {
+      console.log('[RTC] ICE gathering state:', peer.iceGatheringState);
     };
 
     return peer;
@@ -402,13 +449,18 @@
 
   async function handleRTCOffer(msg) {
     if (!msg.offer || !msg.offer.type || !msg.offer.sdp) {
+      console.error('[RTC] Invalid offer received:', JSON.stringify(msg).substring(0, 200));
       throw new Error('Invalid RTC offer');
     }
 
+    console.log('[RTC] Processing offer...');
     const peer = ensureRTCPeer();
     await peer.setRemoteDescription(new RTCSessionDescription(msg.offer));
+    console.log('[RTC] Remote description set successfully');
     const answer = await peer.createAnswer();
+    console.log('[RTC] Answer created, SDP length:', answer.sdp.length);
     await peer.setLocalDescription(answer);
+    console.log('[RTC] Local description set, sending answer to server');
     send({ type: 'rtc-answer', answer: serializeRTCDescription(peer.localDescription) });
   }
 
@@ -471,10 +523,22 @@
     }
   }
 
+  let fallbackFrameCount = 0;
+  let lastFallbackLog = performance.now();
+
   function handleFrame(buffer) {
     if (!handleFrame.hasLoggedFallback) {
-      console.log('[Stream] Using JPEG fallback stream');
+      console.log('[Stream] ⚠️ Using JPEG fallback stream (lower quality than WebRTC)');
+      console.log('[Stream] First JPEG frame size:', (buffer.byteLength / 1024).toFixed(1), 'KB');
       handleFrame.hasLoggedFallback = true;
+    }
+
+    fallbackFrameCount++;
+    const now = performance.now();
+    if (now - lastFallbackLog >= 5000) {
+      console.log('[Stream] JPEG fallback stats: ' + fallbackFrameCount + ' frames in 5s | Frame size: ' + (buffer.byteLength / 1024).toFixed(1) + ' KB');
+      fallbackFrameCount = 0;
+      lastFallbackLog = now;
     }
 
     dom.canvas.style.opacity = '';
@@ -499,8 +563,8 @@
         rafScheduled = true;
         requestAnimationFrame(renderFrame);
       }
-    }).catch(() => {
-      // Silently skip corrupted frames
+    }).catch((err) => {
+      console.warn('[Stream] Failed to decode JPEG frame:', err.message, '| Buffer size:', buffer.byteLength);
     });
   }
 
@@ -562,8 +626,18 @@
   }
 
   function applyScreenZoom() {
+    const tx = screenZoom.translateX;
+    const ty = screenZoom.translateY;
+    const s = screenZoom.scale;
+    const transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+
     dom.canvas.style.transformOrigin = 'center center';
-    dom.canvas.style.transform = `translate(${screenZoom.translateX}px, ${screenZoom.translateY}px) scale(${screenZoom.scale})`;
+    dom.canvas.style.transform = transform;
+
+    if (rtcVideo) {
+      rtcVideo.style.transformOrigin = 'center center';
+      rtcVideo.style.transform = transform;
+    }
   }
 
   function getTouchDistance(t0, t1) {

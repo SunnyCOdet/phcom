@@ -136,32 +136,51 @@ function createApp() {
   return app;
 }
 
+let broadcastFrameCount = 0;
+let lastBroadcastLog = Date.now();
+
 /**
  * Broadcast a binary JPEG frame to all connected WebSocket clients.
  * @param {Buffer} buffer - JPEG image buffer
  */
 function broadcastFrame(buffer) {
+  broadcastFrameCount++;
+  let sentCount = 0;
+  let skippedCount = 0;
+  let rtcOnlyCount = 0;
+
   for (const client of clients) {
     if (client.readyState === 1) { // WebSocket.OPEN
       if (!client.useJpegFallback) {
+        rtcOnlyCount++;
         continue;
       }
 
       const maxBufferedBytes = Math.max(MAX_BUFFERED_BYTES, buffer.length * 2);
       if (client.bufferedAmount > maxBufferedBytes) {
+        skippedCount++;
         continue;
       }
 
       try {
         client.send(buffer, { binary: true }, (err) => {
           if (err) {
-            console.error('[server] Send frame error:', err.message);
+            console.error(`[server] Send frame error to ${client.clientId}:`, err.message);
           }
         });
+        sentCount++;
       } catch (err) {
-        console.error('[server] Broadcast error:', err.message);
+        console.error(`[server] Broadcast error to ${client.clientId}:`, err.message, err.stack);
       }
     }
+  }
+
+  // Log broadcast stats every 5 seconds
+  const now = Date.now();
+  if (now - lastBroadcastLog >= 5000) {
+    console.log(`[server] Broadcast stats: ${broadcastFrameCount} frames | Frame size: ${(buffer.length / 1024).toFixed(1)} KB | Sent to: ${sentCount} | Skipped (backpressure): ${skippedCount} | RTC-only: ${rtcOnlyCount} | Total clients: ${clients.size}`);
+    broadcastFrameCount = 0;
+    lastBroadcastLog = now;
   }
 }
 
@@ -224,6 +243,7 @@ async function handleWSMessage(msg, ws) {
 
       case 'settings': {
         const settings = screenCapture.updateSettings(msg);
+        console.log('[server] Client requested settings update:', JSON.stringify(msg), '-> Applied:', JSON.stringify(settings));
         sendJSON(ws, { type: 'settings', settings });
         break;
       }
@@ -298,7 +318,9 @@ function setupWebSocket() {
     const clientIP = req.socket.remoteAddress;
     console.log(`[server] WebSocket client connected: ${clientIP}`);
     ws.clientId = `client-${Date.now()}-${nextClientId++}`;
+    console.log(`[server] Assigned clientId: ${ws.clientId} to ${clientIP}`);
     ws.useJpegFallback = false;
+    console.log(`[server] Client ${ws.clientId} initial mode: JPEG fallback = ${ws.useJpegFallback}`);
 
     // Add to clients set
     clients.add(ws);

@@ -452,11 +452,12 @@
     let captureHeight = 1080;
     const rtcPeers = new Map();
     let captureSettings = {
-      quality: 90,
+      quality: 95,
       maxFps: 60,
       maxWidth: 3840,
       maxHeight: 2160
     };
+    console.log('[Capture] Initial capture settings:', JSON.stringify(captureSettings));
 
     function clamp(value, min, max) {
       return Math.max(min, Math.min(value, max));
@@ -487,10 +488,14 @@
     }
 
     function applyCaptureSettings(settings) {
+      const previousSettings = { ...captureSettings };
       const previousFps = captureSettings.maxFps;
       captureSettings = normalizeCaptureSettings(settings);
 
+      console.log('[Capture] Settings updated:', JSON.stringify(previousSettings), '->', JSON.stringify(captureSettings));
+
       if (isCapturing && previousFps !== captureSettings.maxFps && window.electronAPI) {
+        console.log('[Capture] FPS changed from', previousFps, 'to', captureSettings.maxFps, '- restarting capture timer');
         window.electronAPI.startCaptureTimer(captureSettings.maxFps);
       }
 
@@ -499,37 +504,57 @@
 
     function getRTCMaxBitrate() {
       const pixels = captureWidth * captureHeight;
-      const qualityScale = captureSettings.quality / 90;
-      let bitrate = 25000000;
+      const qualityScale = captureSettings.quality / 95;
+      // Discord-level bitrates: aggressive high quality for screen sharing
+      let bitrate = 40000000; // 40 Mbps base for 1080p
 
       if (pixels > 2560 * 1440) {
-        bitrate = 80000000;
+        bitrate = 100000000; // 100 Mbps for 4K
       } else if (pixels > 1920 * 1080) {
-        bitrate = 45000000;
+        bitrate = 60000000;  // 60 Mbps for 1440p
       }
 
-      return Math.round(bitrate * qualityScale);
+      const finalBitrate = Math.round(bitrate * qualityScale);
+      console.log('[RTC] Calculated max bitrate:', (finalBitrate / 1000000).toFixed(1), 'Mbps for', captureWidth + 'x' + captureHeight, 'quality:', captureSettings.quality);
+      return finalBitrate;
     }
 
     async function applyRTCSenderQuality(sender) {
       if (!sender || !sender.track) return;
 
+      // Discord-style: force detail content hint for screen share quality
       sender.track.contentHint = 'detail';
+      console.log('[RTC] Applying sender quality - track kind:', sender.track.kind, 'enabled:', sender.track.enabled);
 
       const params = sender.getParameters();
+      // Maintain resolution at all costs - never downscale (Discord approach)
       params.degradationPreference = 'maintain-resolution';
       params.encodings = params.encodings && params.encodings.length > 0 ? params.encodings : [{}];
+      
+      const maxBitrate = getRTCMaxBitrate();
       params.encodings[0] = {
         ...params.encodings[0],
-        maxBitrate: getRTCMaxBitrate(),
+        maxBitrate: maxBitrate,
         maxFramerate: captureSettings.maxFps,
-        scaleResolutionDownBy: 1
+        scaleResolutionDownBy: 1,
+        // Force no quality adaptation
+        networkPriority: 'high',
+        priority: 'high',
       };
+
+      console.log('[RTC] Sender params:', JSON.stringify({
+        degradationPreference: params.degradationPreference,
+        maxBitrate: (maxBitrate / 1000000).toFixed(1) + ' Mbps',
+        maxFramerate: captureSettings.maxFps,
+        scaleResolutionDownBy: 1,
+      }));
 
       try {
         await sender.setParameters(params);
+        console.log('[RTC] Sender quality applied successfully');
       } catch (err) {
         console.warn('[RTC] Could not apply sender quality:', err.message);
+        console.warn('[RTC] Error stack:', err.stack);
       }
     }
 
@@ -575,6 +600,7 @@
     }
 
     function createRTCPeer(clientId) {
+      console.log('[RTC] Creating peer for client:', clientId);
       closeRTCPeer(clientId);
 
       const peer = new RTCPeerConnection({
@@ -583,73 +609,165 @@
 
       peer.onicecandidate = (event) => {
         if (event.candidate) {
+          console.log('[RTC] ICE candidate for', clientId, ':', event.candidate.type, event.candidate.protocol);
           sendRTCToClient({ type: 'rtc-ice', clientId, candidate: serializeRTCIceCandidate(event.candidate) });
         }
       };
 
       peer.onconnectionstatechange = () => {
+        console.log('[RTC] Peer', clientId, 'connection state:', peer.connectionState);
         if (['failed', 'closed'].includes(peer.connectionState)) {
+          console.warn('[RTC] Peer', clientId, 'connection', peer.connectionState);
           closeRTCPeer(clientId);
+        } else if (peer.connectionState === 'connected') {
+          console.log('[RTC] ✅ Peer', clientId, 'CONNECTED - streaming at', captureWidth + 'x' + captureHeight);
+          // Log codec info from stats
+          peer.getStats().then((stats) => {
+            stats.forEach((report) => {
+              if (report.type === 'outbound-rtp' && report.kind === 'video') {
+                console.log('[RTC] Outbound video stats:', JSON.stringify({
+                  codec: report.codecId,
+                  bytesSent: report.bytesSent,
+                  framesSent: report.framesSent,
+                  framesEncoded: report.framesEncoded,
+                  frameWidth: report.frameWidth,
+                  frameHeight: report.frameHeight,
+                  framesPerSecond: report.framesPerSecond,
+                  qualityLimitationReason: report.qualityLimitationReason,
+                }));
+              }
+              if (report.type === 'codec' && report.mimeType && report.mimeType.includes('video')) {
+                console.log('[RTC] Video codec:', report.mimeType, 'payloadType:', report.payloadType);
+              }
+            });
+          }).catch(() => {});
         }
       };
 
+      peer.onicecandidateerror = (event) => {
+        console.warn('[RTC] ICE error for', clientId, ':', event.errorCode, event.errorText);
+      };
+
+      peer.oniceconnectionstatechange = () => {
+        console.log('[RTC] ICE state for', clientId, ':', peer.iceConnectionState);
+      };
+
       if (streamInstance) {
+        console.log('[RTC] Adding', streamInstance.getVideoTracks().length, 'video track(s) to peer', clientId);
         streamInstance.getVideoTracks().forEach((track) => {
           track.contentHint = 'detail';
+          console.log('[RTC] Adding track:', track.id, 'kind:', track.kind, 'settings:', JSON.stringify(track.getSettings()));
           const sender = peer.addTrack(track, streamInstance);
           applyRTCSenderQuality(sender);
         });
+      } else {
+        console.warn('[RTC] No stream instance available for peer', clientId);
       }
 
       rtcPeers.set(clientId, peer);
+      console.log('[RTC] Total active peers:', rtcPeers.size);
       return peer;
     }
 
+    // Prefer VP9 or H264 High profile for better screen share quality (like Discord)
+    function preferHighQualityCodec(sdp) {
+      // Boost b=AS bandwidth line if present, or add it
+      const maxBitrateKbps = Math.round(getRTCMaxBitrate() / 1000);
+      
+      // Replace or add bandwidth line for video
+      let modifiedSdp = sdp;
+      if (modifiedSdp.includes('m=video')) {
+        // Remove existing b= lines for video
+        modifiedSdp = modifiedSdp.replace(/b=AS:\d+\r\n/g, '');
+        // Add high bandwidth after m=video line
+        modifiedSdp = modifiedSdp.replace(
+          /(m=video .*\r\n)/,
+          `$1b=AS:${maxBitrateKbps}\r\n`
+        );
+      }
+      
+      console.log('[RTC] SDP modified: max bandwidth set to', maxBitrateKbps, 'kbps');
+      return modifiedSdp;
+    }
+
     async function startRTCForClient(clientId) {
-      if (!clientId || !streamInstance) return;
+      if (!clientId || !streamInstance) {
+        console.warn('[RTC] Cannot start for client', clientId, '- streamInstance:', !!streamInstance);
+        return;
+      }
 
       try {
-        console.log(`[Stream] Starting WebRTC stream for ${clientId} at ${captureWidth}x${captureHeight}`);
+        console.log(`[Stream] ========================================`);
+        console.log(`[Stream] Starting WebRTC stream for ${clientId}`);
+        console.log(`[Stream] Resolution: ${captureWidth}x${captureHeight}`);
+        console.log(`[Stream] Quality: ${captureSettings.quality}, FPS: ${captureSettings.maxFps}`);
+        console.log(`[Stream] ========================================`);
+        
         const peer = createRTCPeer(clientId);
         await Promise.all(peer.getSenders().map((sender) => applyRTCSenderQuality(sender)));
+        
         const offer = await peer.createOffer({ offerToReceiveVideo: false, offerToReceiveAudio: false });
-        await peer.setLocalDescription(offer);
+        
+        // Modify SDP for higher quality (Discord-style)
+        const modifiedOffer = {
+          type: offer.type,
+          sdp: preferHighQualityCodec(offer.sdp),
+        };
+        
+        await peer.setLocalDescription(modifiedOffer);
+        console.log('[RTC] Offer created and set as local description, SDP length:', modifiedOffer.sdp.length);
         sendRTCToClient({ type: 'rtc-offer', clientId, offer: serializeRTCDescription(peer.localDescription) });
+        console.log('[RTC] Offer sent to client', clientId);
       } catch (err) {
         console.error('[RTC] Failed to start peer:', err.message);
+        console.error('[RTC] Error stack:', err.stack);
         closeRTCPeer(clientId);
       }
     }
 
     async function handleRTCSignal(message) {
-      if (!message || !message.clientId) return;
+      if (!message || !message.clientId) {
+        console.warn('[RTC] Received signal without clientId:', JSON.stringify(message));
+        return;
+      }
+
+      console.log('[RTC] Handling signal:', message.type, 'for client:', message.clientId);
 
       switch (message.type) {
         case 'rtc-client-connected':
         case 'rtc-ready':
+          console.log('[RTC] Client', message.clientId, 'ready, starting WebRTC stream...');
           await startRTCForClient(message.clientId);
           break;
         case 'rtc-answer': {
           const peer = rtcPeers.get(message.clientId);
           if (peer && message.answer && message.answer.type && message.answer.sdp) {
-            console.log(`[Stream] WebRTC answer received from ${message.clientId}`);
+            console.log('[RTC] Processing answer from', message.clientId, '- SDP length:', message.answer.sdp.length);
             await peer.setRemoteDescription(new RTCSessionDescription(message.answer));
+            console.log('[RTC] Remote description set for', message.clientId);
+          } else {
+            console.warn('[RTC] Invalid answer from', message.clientId, '- peer exists:', !!peer);
           }
           break;
         }
         case 'rtc-ice': {
           const peer = rtcPeers.get(message.clientId);
           if (peer && message.candidate && message.candidate.candidate) {
+            console.log('[RTC] Adding ICE candidate for', message.clientId);
             await peer.addIceCandidate(new RTCIceCandidate(message.candidate));
           }
           break;
         }
         case 'rtc-client-disconnected':
+          console.log('[RTC] Client', message.clientId, 'disconnected');
+          closeRTCPeer(message.clientId);
+          break;
         case 'rtc-fallback':
-          console.log(`[Stream] Client ${message.clientId} switched to JPEG fallback`);
+          console.log('[RTC] ⚠️ Client', message.clientId, 'switched to JPEG fallback (lower quality)');
           closeRTCPeer(message.clientId);
           break;
         default:
+          console.log('[RTC] Unhandled signal type:', message.type);
           break;
       }
     }
@@ -664,9 +782,15 @@
       });
     }
 
+    let captureFrameCount = 0;
+    let lastCaptureLog = Date.now();
+    let totalCaptureTimeMs = 0;
+
     async function captureNextFrame() {
       if (!isCapturing || !videoElement || videoElement.paused || videoElement.ended) return;
       isEncoding = true;
+
+      const frameStart = performance.now();
 
       try {
         canvasContext.drawImage(videoElement, 0, 0, captureWidth, captureHeight);
@@ -678,7 +802,9 @@
             const scaleX = captureWidth / screenInfo.width;
             const scaleY = captureHeight / screenInfo.height;
             canvasContext.drawImage(cursorImg, cursor.x * scaleX, cursor.y * scaleY, 20, 20);
-          } catch(e) { }
+          } catch(e) {
+            console.warn('[Capture] Cursor fetch error:', e.message);
+          }
         }
 
         const jpegQuality = captureSettings.quality / 100;
@@ -689,33 +815,60 @@
           if (window.electronAPI && isCapturing) {
             window.electronAPI.sendFrame(arrayBuffer);
           }
+          
+          captureFrameCount++;
+          totalCaptureTimeMs += (performance.now() - frameStart);
+          
+          // Log capture stats every 5 seconds
+          const now = Date.now();
+          if (now - lastCaptureLog >= 5000) {
+            const avgMs = captureFrameCount > 0 ? (totalCaptureTimeMs / captureFrameCount).toFixed(1) : 0;
+            console.log(`[Capture] Stats: ${captureFrameCount} frames in 5s | Avg encode: ${avgMs}ms | JPEG quality: ${jpegQuality} | Frame size: ${(arrayBuffer.byteLength / 1024).toFixed(1)} KB | Resolution: ${captureWidth}x${captureHeight}`);
+            captureFrameCount = 0;
+            totalCaptureTimeMs = 0;
+            lastCaptureLog = now;
+          }
+        } else if (!blob) {
+          console.warn('[Capture] toBlob returned null - encoding may have failed');
         }
       } catch (err) {
         console.error('[Capture Loop] Draw/Blob error:', err.message);
+        console.error('[Capture Loop] Error stack:', err.stack);
       } finally {
         isEncoding = false;
       }
     }
 
     async function startScreenCapture() {
-      if (isCapturing) return;
+      if (isCapturing) {
+        console.log('[Capture] Already capturing, skipping start');
+        return;
+      }
       isCapturing = true;
+      console.log('[Capture] ========================================');
+      console.log('[Capture] Starting screen capture...');
+      console.log('[Capture] ========================================');
+      
       try {
         if (window.electronAPI) {
           screenInfo = await window.electronAPI.getScreenInfo();
+          console.log('[Capture] Screen info:', JSON.stringify(screenInfo));
         }
 
         const targetSize = getCaptureSize();
         captureWidth = targetSize.width;
         captureHeight = targetSize.height;
-        console.log(`[Capture] Display logical ${screenInfo?.logicalWidth || '?'}x${screenInfo?.logicalHeight || '?'} @ ${screenInfo?.scaleFactor || 1}x, capturing ${captureWidth}x${captureHeight}`);
+        console.log('[Capture] Display: logical ' + (screenInfo?.logicalWidth || '?') + 'x' + (screenInfo?.logicalHeight || '?') + ' @ ' + (screenInfo?.scaleFactor || 1) + 'x');
+        console.log('[Capture] Capture resolution: ' + captureWidth + 'x' + captureHeight);
+        console.log('[Capture] Settings:', JSON.stringify(captureSettings));
 
         const sourceId = await window.electronAPI.getPrimarySourceId();
         if (!sourceId) {
           throw new Error('No desktop source found');
         }
+        console.log('[Capture] Source ID:', sourceId);
 
-        streamInstance = await navigator.mediaDevices.getUserMedia({
+        const constraints = {
           audio: false,
           video: {
             mandatory: {
@@ -728,10 +881,17 @@
               maxFrameRate: captureSettings.maxFps
             }
           }
-        });
+        };
+        console.log('[Capture] getUserMedia constraints:', JSON.stringify(constraints));
+
+        streamInstance = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log('[Capture] Got media stream, tracks:', streamInstance.getTracks().length);
 
         streamInstance.getVideoTracks().forEach((track) => {
           track.contentHint = 'detail';
+          const settings = track.getSettings();
+          console.log('[Capture] Video track settings:', JSON.stringify(settings));
+          console.log('[Capture] Video track constraints:', JSON.stringify(track.getConstraints()));
         });
 
         videoElement = document.createElement('video');
@@ -743,7 +903,7 @@
         canvasElement.width = captureWidth;
         canvasElement.height = captureHeight;
         canvasContext = canvasElement.getContext('2d', { alpha: false, desynchronized: true });
-        canvasContext.imageSmoothingEnabled = true;
+        canvasContext.imageSmoothingEnabled = false;
         canvasContext.imageSmoothingQuality = 'high';
 
         videoElement.onloadedmetadata = () => {
@@ -752,27 +912,45 @@
           const track = streamInstance.getVideoTracks()[0];
           const settings = track.getSettings();
           targetFps = Math.min(captureSettings.maxFps, settings.frameRate || captureSettings.maxFps);
-          console.log(`[Capture] Starting ${captureWidth}x${captureHeight} at ${targetFps} FPS, WebRTC bitrate ${Math.round(getRTCMaxBitrate() / 1000000)} Mbps`);
+          
+          console.log('[Capture] ✅ Capture started successfully:');
+          console.log('[Capture]   Resolution: ' + captureWidth + 'x' + captureHeight);
+          console.log('[Capture]   FPS: ' + targetFps);
+          console.log('[Capture]   WebRTC bitrate: ' + Math.round(getRTCMaxBitrate() / 1000000) + ' Mbps');
+          console.log('[Capture]   JPEG quality: ' + (captureSettings.quality / 100));
+          console.log('[Capture]   Actual track settings:', JSON.stringify(settings));
           
           if (window.electronAPI) {
             window.electronAPI.startCaptureTimer(targetFps);
           }
         };
+
+        videoElement.onerror = (err) => {
+          console.error('[Capture] Video element error:', err);
+        };
       } catch (err) {
-        console.error('[Capture] Failed to start screen capture:', err.message);
+        console.error('[Capture] ❌ Failed to start screen capture:', err.message);
+        console.error('[Capture] Error stack:', err.stack);
         isCapturing = false;
       }
     }
 
     function stopScreenCapture() {
+      console.log('[Capture] Stopping screen capture...');
+      console.log('[Capture] Active RTC peers:', rtcPeers.size);
       isCapturing = false;
       isEncoding = false;
       if (window.electronAPI) {
         window.electronAPI.stopCaptureTimer();
       }
       if (streamInstance) {
-        streamInstance.getTracks().forEach(track => track.stop());
+        const trackCount = streamInstance.getTracks().length;
+        streamInstance.getTracks().forEach(track => {
+          console.log('[Capture] Stopping track:', track.kind, track.id);
+          track.stop();
+        });
         streamInstance = null;
+        console.log('[Capture] Stopped', trackCount, 'track(s)');
       }
       closeAllRTCPeers();
       if (videoElement) {
@@ -782,6 +960,7 @@
       }
       canvasElement = null;
       canvasContext = null;
+      console.log('[Capture] Screen capture stopped');
     }
 
     // Window controls
