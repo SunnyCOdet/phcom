@@ -12,7 +12,7 @@
   <title>Remote Desktop</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="index.css">
 </head>
 <body>
@@ -39,7 +39,9 @@
   <div id="screen-container">
     <canvas id="screen-canvas"></canvas>
     <div id="no-signal">
-      <div class="no-signal-icon">🖥️</div>
+      <div class="no-signal-icon">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      </div>
       <div class="no-signal-text">Waiting for connection…</div>
     </div>
   </div>
@@ -76,31 +78,45 @@
   <!-- Toolbar -->
   <div id="toolbar">
     <button class="toolbar-btn" data-action="keyboard" id="btn-keyboard">
-      <span class="toolbar-icon">⌨️</span>
+      <span class="toolbar-icon">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h0M10 10h0M14 10h0M18 10h0M6 14h0M18 14h0M9 14h6"/></svg>
+      </span>
       <span class="toolbar-label">Keys</span>
     </button>
     <button class="toolbar-btn" data-action="mouse" id="btn-mouse">
-      <span class="toolbar-icon">🖱️</span>
+      <span class="toolbar-icon">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l7.07 16.97 2.51-7.39 7.39-2.51L4 4z"/></svg>
+      </span>
       <span class="toolbar-label">Mouse</span>
     </button>
     <button class="toolbar-btn" data-action="apps" id="btn-apps">
-      <span class="toolbar-icon">📱</span>
+      <span class="toolbar-icon">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      </span>
       <span class="toolbar-label">Apps</span>
     </button>
     <button class="toolbar-btn" data-action="clipboard" id="btn-clipboard">
-      <span class="toolbar-icon">📋</span>
+      <span class="toolbar-icon">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1H9V4z"/></svg>
+      </span>
       <span class="toolbar-label">Clip</span>
     </button>
     <button class="toolbar-btn" data-action="files" id="btn-files">
-      <span class="toolbar-icon">📁</span>
+      <span class="toolbar-icon">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+      </span>
       <span class="toolbar-label">Files</span>
     </button>
     <button class="toolbar-btn" data-action="media" id="btn-media">
-      <span class="toolbar-icon">🎵</span>
+      <span class="toolbar-icon">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>
+      </span>
       <span class="toolbar-label">Media</span>
     </button>
     <button class="toolbar-btn" data-action="settings" id="btn-settings">
-      <span class="toolbar-icon">⚙️</span>
+      <span class="toolbar-icon">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h7M15 18h5"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg>
+      </span>
       <span class="toolbar-label">Settings</span>
     </button>
   </div>
@@ -131,10 +147,12 @@
       <textarea id="clipboard-text" placeholder="Clipboard content will appear here…"></textarea>
       <div class="panel-actions">
         <button class="action-btn" id="clipboard-fetch">
-          <span>📥</span> Copy from PC
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+          Copy from PC
         </button>
         <button class="action-btn accent" id="clipboard-send">
-          <span>📤</span> Send to PC
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></svg>
+          Send to PC
         </button>
       </div>
     </div>
@@ -150,7 +168,9 @@
       <div class="file-upload-area">
         <input type="file" id="file-input" multiple hidden>
         <label for="file-input" class="file-upload-label">
-          <span class="file-upload-icon">📂</span>
+          <span class="file-upload-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 16v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/></svg>
+          </span>
           <span class="file-upload-text">Tap to select files</span>
         </label>
       </div>
@@ -179,17 +199,29 @@
         <div class="media-section">
           <div class="media-section-title">Volume</div>
           <div class="media-buttons-row">
-            <button class="media-btn" data-media="volumeDown">🔉</button>
-            <button class="media-btn" data-media="mute">🔇</button>
-            <button class="media-btn" data-media="volumeUp">🔊</button>
+            <button class="media-btn" data-media="volumeDown" aria-label="Volume down">
+              <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 10h4"/></svg>
+            </button>
+            <button class="media-btn" data-media="mute" aria-label="Mute">
+              <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M22 9l-6 6M16 9l6 6"/></svg>
+            </button>
+            <button class="media-btn" data-media="volumeUp" aria-label="Volume up">
+              <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a5 5 0 0 1 0 6M19 7a8 8 0 0 1 0 10"/></svg>
+            </button>
           </div>
         </div>
         <div class="media-section">
           <div class="media-section-title">Playback</div>
           <div class="media-buttons-row">
-            <button class="media-btn" data-media="prevTrack">⏮️</button>
-            <button class="media-btn large" data-media="playPause">⏯️</button>
-            <button class="media-btn" data-media="nextTrack">⏭️</button>
+            <button class="media-btn" data-media="prevTrack" aria-label="Previous track">
+              <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M18 18V6l-8.5 6L18 18z" fill="currentColor" stroke="none"/><path d="M6 6v12"/></svg>
+            </button>
+            <button class="media-btn large" data-media="playPause" aria-label="Play / pause">
+              <svg viewBox="0 0 24 24"><path d="M7 4h3v16H7zM14 4h3v16h-3z"/></svg>
+            </button>
+            <button class="media-btn" data-media="nextTrack" aria-label="Next track">
+              <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6v12l8.5-6L6 6z" fill="currentColor" stroke="none"/><path d="M18 6v12"/></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -219,8 +251,8 @@
           <span class="setting-value" id="audio-status-value">Muted</span>
         </div>
         <div class="mode-toggle-group">
-          <button class="mode-btn" id="btn-audio-unmute" data-audio="unmute">🔊 Unmute</button>
-          <button class="mode-btn active" id="btn-audio-mute" data-audio="mute">🔇 Mute</button>
+          <button class="mode-btn" id="btn-audio-unmute" data-audio="unmute">Unmute</button>
+          <button class="mode-btn active" id="btn-audio-mute" data-audio="mute">Mute</button>
         </div>
       </div>
       <div class="setting-group">
