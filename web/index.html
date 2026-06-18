@@ -219,6 +219,14 @@
     const params = new URLSearchParams(location.search);
     const peerId = "v_" + Math.random().toString(36).slice(2, 10);
 
+    // ── Verbose diagnostics ─────────────────────────────────────────────────
+    // Everything is prefixed so it's easy to copy the relevant lines out of the
+    // phone's browser console. peerId lets us correlate with the host logs.
+    const L = (...a) => console.log("%c[pcphone]", "color:#4ea1ff;font-weight:bold", ...a);
+    const LW = (...a) => console.warn("[pcphone]", ...a);
+    const LE = (...a) => console.error("[pcphone]", ...a);
+    L("client loaded. peerId =", peerId, "room param =", params.get("room") || "(none)");
+
     const show = (which) => {
       $("login").classList.toggle("hidden", which !== "login");
       $("picker").classList.toggle("hidden", which !== "picker");
@@ -289,35 +297,70 @@
       cleanup();
       show("stage");
       setStatus("joining " + room + "…");
+      L("connect() room =", room, "→ subscribing to channel room:" + room);
       channel = sb.channel("room:" + room, { config: { broadcast: { self: false } } });
       channel
-        .on("broadcast", { event: "offer" }, ({ payload }) => { if (payload.to === peerId) onOffer(payload); })
-        .on("broadcast", { event: "ice" }, ({ payload }) => { if (payload.to === peerId && payload.role === "host") onRemoteIce(payload.candidate); })
-        .subscribe((s) => { if (s === "SUBSCRIBED") { setStatus("waiting for PC…"); send("join", { peerId }); } });
+        .on("broadcast", { event: "offer" }, ({ payload }) => {
+          L("◀ broadcast 'offer' received. to =", payload.to, "(mine =", peerId + ")", "sdp bytes =", (payload.sdp || "").length);
+          if (payload.to === peerId) onOffer(payload);
+          else L("  …offer not addressed to me, ignoring.");
+        })
+        .on("broadcast", { event: "ice" }, ({ payload }) => {
+          if (payload.to === peerId && payload.role === "host") { L("◀ remote ICE candidate from host"); onRemoteIce(payload.candidate); }
+        })
+        .subscribe((s) => {
+          L("channel subscribe state:", s);
+          if (s === "SUBSCRIBED") { setStatus("waiting for PC…"); L("▶ sending 'join' { peerId:", peerId, "}"); send("join", { peerId }); }
+          if (s === "CHANNEL_ERROR" || s === "TIMED_OUT" || s === "CLOSED") LE("channel problem:", s, "— signaling will not work.");
+        });
     }
-    function send(event, payload) { if (channel) channel.send({ type: "broadcast", event, payload }); }
+    function send(event, payload) {
+      if (!channel) { LW("send() called but channel is null. event =", event); return; }
+      L("▶ broadcast '" + event + "'", payload && payload.to ? "(to " + payload.to + ")" : "");
+      channel.send({ type: "broadcast", event, payload });
+    }
 
     async function onOffer(payload) {
       setStatus("connecting…");
+      L("onOffer() creating RTCPeerConnection (STUN only)");
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      let iceSent = 0;
       pc.ontrack = (e) => {
-        if (video.srcObject !== e.streams[0]) video.srcObject = e.streams[0];
+        L("★ ontrack FIRED. kind =", e.track && e.track.kind, "streams =", e.streams.length, "trackState =", e.track && e.track.readyState);
+        if (e.streams[0]) L("  stream tracks:", e.streams[0].getTracks().map(t => t.kind + "/" + t.readyState).join(", "));
+        if (video.srcObject !== e.streams[0]) { video.srcObject = e.streams[0]; L("  video.srcObject set."); }
         video.muted = audioMuted;
-        video.play().then(() => $("tap-start").classList.add("hidden")).catch(() => $("tap-start").classList.remove("hidden"));
+        video.play()
+          .then(() => { L("  ✓ video.play() resolved — should be visible now. videoWidth =", video.videoWidth); $("tap-start").classList.add("hidden"); })
+          .catch((err) => { LW("  ✗ video.play() rejected (autoplay blocked?):", err && err.name, err && err.message); $("tap-start").classList.remove("hidden"); });
       };
       pc.ondatachannel = (e) => {
+        L("ondatachannel:", e.channel && e.channel.label);
         dc = e.channel; dc.binaryType = "arraybuffer";
-        dc.onopen = () => setStatus("connected");
+        dc.onopen = () => { L("data channel OPEN"); setStatus("connected"); };
+        dc.onclose = () => L("data channel CLOSED");
         dc.onmessage = onDcMessage;
       };
-      pc.onicecandidate = (e) => { if (e.candidate) send("ice", { to: "host", from: peerId, peerId, role: "viewer", candidate: e.candidate }); };
-      pc.onconnectionstatechange = () => { setStatus(pc.connectionState); if (pc.connectionState === "failed") setStatus("connection failed — Exit & reconnect"); };
+      pc.onicecandidate = (e) => {
+        if (e.candidate) { iceSent++; send("ice", { to: "host", from: peerId, peerId, role: "viewer", candidate: e.candidate }); }
+        else L("ICE gathering complete. candidates sent =", iceSent);
+      };
+      pc.oniceconnectionstatechange = () => L("iceConnectionState →", pc.iceConnectionState);
+      pc.onicegatheringstatechange = () => L("iceGatheringState →", pc.iceGatheringState);
+      pc.onconnectionstatechange = () => {
+        L("connectionState →", pc.connectionState);
+        setStatus(pc.connectionState);
+        if (pc.connectionState === "failed") { LE("connection FAILED — likely no STUN path / needs TURN."); setStatus("connection failed — Exit & reconnect"); }
+      };
+      L("setRemoteDescription(offer)…");
       await pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
+      L("  offer SDP has m-lines:", (payload.sdp.match(/^m=.*/gm) || []).map(s => s.slice(2, 8)).join(", "));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+      L("▶ sending 'answer' to host");
       send("answer", { to: "host", peerId, sdp: answer.sdp });
     }
-    async function onRemoteIce(c) { try { if (pc && c) await pc.addIceCandidate(c); } catch (e) {} }
+    async function onRemoteIce(c) { try { if (pc && c) await pc.addIceCandidate(c); } catch (e) { LW("addIceCandidate failed:", e && e.message); } }
 
     // Replies from the PC.
     function onDcMessage(e) {
