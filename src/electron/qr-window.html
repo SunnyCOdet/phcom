@@ -1273,6 +1273,16 @@
 
     let sb = null;
     let channel = null;
+    // STUN + TURN. TURN relays media when the direct P2P path is blocked
+    // (iPhone-hotspot client isolation, symmetric NAT, virtual-adapter junk
+    // candidates). Public openrelay test creds — replace with your own TURN
+    // for production. MUST match the viewer's ICE server list.
+    const ICE_SERVERS = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    ];
     const remotePeers = new Map(); // peerId -> RTCPeerConnection
     const remoteChannels = new Map(); // peerId -> RTCDataChannel
     const uploads = new Map(); // peerId -> { name, chunks: [] }
@@ -1415,7 +1425,7 @@
 
       closeRemotePeer(peerId);
       const stream = B.getStream();
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       remotePeers.set(peerId, pc);
 
       pc.onicecandidate = (e) => { if (e.candidate) chSend('ice', { to: peerId, role: 'host', candidate: e.candidate }); };

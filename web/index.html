@@ -304,6 +304,17 @@
     }
 
     // ── WebRTC viewer ─────────────────────────────────────────────────────────
+    // STUN discovers public addresses; TURN relays media when the direct P2P
+    // path is blocked (e.g. iPhone hotspot client-isolation, symmetric NAT,
+    // restrictive firewalls). The openrelay.metered.ca creds are public test
+    // credentials — fine for getting this working; swap in your own TURN
+    // (coturn / Metered / Twilio) for production reliability.
+    const ICE_SERVERS = [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+      { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+      { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+    ];
     let pc = null, channel = null, dc = null;
     const video = $("video");
 
@@ -344,8 +355,8 @@
 
     async function onOffer(payload) {
       setStatus("connecting…");
-      L("onOffer() creating RTCPeerConnection (STUN only)");
-      pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      L("onOffer() creating RTCPeerConnection (STUN + TURN relay)");
+      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       let iceSent = 0;
       pc.ontrack = (e) => {
         L("★ ontrack FIRED. kind =", e.track && e.track.kind, "streams =", e.streams.length, "trackState =", e.track && e.track.readyState);
@@ -394,17 +405,21 @@
       statsTimer = setInterval(async () => {
         if (!pc) return;
         const stats = await pc.getStats();
-        let inV = null, pair = null;
+        let inV = null, pair = null; const byId = {};
         stats.forEach((r) => {
+          byId[r.id] = r;
           if (r.type === "inbound-rtp" && r.kind === "video") inV = r;
           if (r.type === "candidate-pair" && r.nominated && r.state === "succeeded") pair = r;
         });
         if (inV) {
           const d = inV.bytesReceived - lastBytes; lastBytes = inV.bytesReceived;
           L("stats: video bytes=" + inV.bytesReceived + " (+" + d + ") frames=" + (inV.framesDecoded || 0) + " w=" + (inV.frameWidth || 0) + " h=" + (inV.frameHeight || 0) + " video.readyState=" + video.readyState);
-          if (inV.bytesReceived === 0) LW("  no video bytes arriving yet — codec/transport issue.");
+          if (inV.bytesReceived === 0) LW("  no video bytes arriving yet — transport/path issue.");
         } else { L("stats: no inbound video report yet"); }
-        if (pair) L("ICE pair: " + (pair.localCandidateId || "?") + " (poll for type via candidate stats)");
+        if (pair) {
+          const loc = byId[pair.localCandidateId], rem = byId[pair.remoteCandidateId];
+          L("ICE pair: local=" + (loc ? loc.candidateType : "?") + " remote=" + (rem ? rem.candidateType : "?") + (loc && loc.candidateType === "relay" ? " (TURN relay ✓)" : ""));
+        }
       }, 2000);
     }
 
