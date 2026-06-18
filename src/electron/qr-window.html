@@ -810,11 +810,15 @@
       const maxBitrateKbps = Math.round(getRTCMaxBitrate() / 1000);
       let modifiedSdp = sdp;
 
-      // Add bandwidth line
+      // Add bandwidth line. Per RFC 4566 the b= line must come AFTER the
+      // c= line of the media section, not immediately after m=video — putting
+      // it in the wrong place can make the video m-section be mishandled even
+      // though ICE/data-channel still connect. Insert it after the video
+      // section's c= line.
       if (modifiedSdp.includes('m=video')) {
         modifiedSdp = modifiedSdp.replace(/b=AS:\d+\r\n/g, '');
         modifiedSdp = modifiedSdp.replace(
-          /(m=video .*\r\n)/,
+          /(m=video[\s\S]*?\r\nc=[^\r\n]*\r\n)/,
           `$1b=AS:${maxBitrateKbps}\r\n`
         );
       }

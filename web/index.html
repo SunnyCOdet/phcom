@@ -31,6 +31,8 @@
   video{width:100%;height:100%;object-fit:contain;background:#000;touch-action:none;}
   #tap-start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);z-index:7;font-size:15px;}
   #status{position:fixed;top:8px;left:8px;font-size:11px;color:var(--muted);background:rgba(0,0,0,.55);padding:5px 9px;border-radius:7px;z-index:8;}
+  #dbg{position:fixed;top:34px;left:8px;right:8px;max-height:42vh;overflow-y:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;line-height:1.45;color:#9ae6ff;background:rgba(0,0,0,.82);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:7px 9px;z-index:30;display:block;white-space:pre-wrap;word-break:break-word;}
+  #dbg.hidden{display:none!important;}
   #signout{position:fixed;top:8px;right:8px;font-size:11px;color:var(--muted);background:rgba(0,0,0,.55);padding:5px 9px;border-radius:7px;z-index:8;}
   #hidden-input{position:fixed;opacity:0;height:1px;width:1px;top:-100px;}
 
@@ -87,6 +89,7 @@
   <div id="stage">
     <div id="status">idle</div>
     <button id="signout">Exit</button>
+    <div id="dbg"></div>
     <video id="video" autoplay playsinline muted></video>
     <div id="tap-start" class="hidden">Tap to start</div>
     <input id="hidden-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
@@ -222,10 +225,26 @@
     // ── Verbose diagnostics ─────────────────────────────────────────────────
     // Everything is prefixed so it's easy to copy the relevant lines out of the
     // phone's browser console. peerId lets us correlate with the host logs.
-    const L = (...a) => console.log("%c[pcphone]", "color:#4ea1ff;font-weight:bold", ...a);
-    const LW = (...a) => console.warn("[pcphone]", ...a);
-    const LE = (...a) => console.error("[pcphone]", ...a);
-    L("client loaded. peerId =", peerId, "room param =", params.get("room") || "(none)");
+    // Logs go to the console AND to an on-screen overlay (#dbg) so they can be
+    // read directly on a phone where DevTools isn't available. Tap the status
+    // chip (top-left) to toggle the overlay.
+    function dbgLine(kind, args) {
+      const box = $("dbg"); if (!box) return;
+      const t = new Date().toLocaleTimeString().split(" ")[0];
+      const msg = args.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
+      const div = document.createElement("div");
+      div.textContent = t + "  " + msg;
+      div.style.color = kind === "e" ? "#f87171" : kind === "w" ? "#fbbf24" : "#9ae6ff";
+      box.appendChild(div);
+      while (box.childNodes.length > 200) box.removeChild(box.firstChild);
+      box.scrollTop = box.scrollHeight;
+    }
+    const L = (...a) => { console.log("%c[pcphone]", "color:#4ea1ff;font-weight:bold", ...a); dbgLine("i", a); };
+    const LW = (...a) => { console.warn("[pcphone]", ...a); dbgLine("w", a); };
+    const LE = (...a) => { console.error("[pcphone]", ...a); dbgLine("e", a); };
+    window.addEventListener("error", (e) => LE("window error:", e.message, "@", (e.filename || "").split("/").pop() + ":" + e.lineno));
+    window.addEventListener("unhandledrejection", (e) => LE("unhandled promise:", (e.reason && (e.reason.message || e.reason)) || e.reason));
+    L("client loaded. build=diag-2. peerId =", peerId, "room param =", params.get("room") || "(none)");
 
     const show = (which) => {
       $("login").classList.toggle("hidden", which !== "login");
@@ -234,6 +253,7 @@
     };
     const setMsg = (el, t, ok) => { const m = $(el); m.textContent = t || ""; m.className = "msg" + (ok ? " ok" : ""); };
     const setStatus = (t) => { $("status").textContent = t; };
+    $("status").onclick = () => $("dbg").classList.toggle("hidden");
     let toastTimer = null;
     const toast = (t) => { const e = $("toast"); e.textContent = t; e.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => e.classList.remove("show"), 2200); };
 
@@ -288,6 +308,8 @@
     const video = $("video");
 
     function cleanup() {
+      try { if (statsTimer) clearInterval(statsTimer); } catch (e) {}
+      statsTimer = null; lastBytes = 0;
       try { if (pc) pc.close(); } catch (e) {}
       try { if (channel) sb.removeChannel(channel); } catch (e) {}
       pc = null; channel = null; dc = null; video.srcObject = null;
@@ -350,6 +372,7 @@
       pc.onconnectionstatechange = () => {
         L("connectionState →", pc.connectionState);
         setStatus(pc.connectionState);
+        if (pc.connectionState === "connected") startStatsPoll();
         if (pc.connectionState === "failed") { LE("connection FAILED — likely no STUN path / needs TURN."); setStatus("connection failed — Exit & reconnect"); }
       };
       L("setRemoteDescription(offer)…");
@@ -361,6 +384,29 @@
       send("answer", { to: "host", peerId, sdp: answer.sdp });
     }
     async function onRemoteIce(c) { try { if (pc && c) await pc.addIceCandidate(c); } catch (e) { LW("addIceCandidate failed:", e && e.message); } }
+
+    // Polls inbound video stats so we can tell whether frames are actually
+    // arriving (bytes>0 but no picture = decode/render issue; bytes stuck at 0
+    // = codec/transport issue) and which ICE candidate pair is in use.
+    let statsTimer = null, lastBytes = 0;
+    function startStatsPoll() {
+      if (statsTimer) return;
+      statsTimer = setInterval(async () => {
+        if (!pc) return;
+        const stats = await pc.getStats();
+        let inV = null, pair = null;
+        stats.forEach((r) => {
+          if (r.type === "inbound-rtp" && r.kind === "video") inV = r;
+          if (r.type === "candidate-pair" && r.nominated && r.state === "succeeded") pair = r;
+        });
+        if (inV) {
+          const d = inV.bytesReceived - lastBytes; lastBytes = inV.bytesReceived;
+          L("stats: video bytes=" + inV.bytesReceived + " (+" + d + ") frames=" + (inV.framesDecoded || 0) + " w=" + (inV.frameWidth || 0) + " h=" + (inV.frameHeight || 0) + " video.readyState=" + video.readyState);
+          if (inV.bytesReceived === 0) LW("  no video bytes arriving yet — codec/transport issue.");
+        } else { L("stats: no inbound video report yet"); }
+        if (pair) L("ICE pair: " + (pair.localCandidateId || "?") + " (poll for type via candidate stats)");
+      }, 2000);
+    }
 
     // Replies from the PC.
     function onDcMessage(e) {
