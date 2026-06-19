@@ -271,11 +271,29 @@
       if (!data.session) return setMsg("login-msg", "Account created. If confirmation is on, confirm then sign in.", true);
       afterLogin();
     };
-    const signOut = async () => { try { await sb.auth.signOut(); } catch (e) {} cleanup(); show("login"); };
+    const signOut = async () => {
+      cleanup();
+      // In room-code mode there's no session to drop — just reconnect.
+      if ((params.get("room") || "")) { location.reload(); return; }
+      try { await sb.auth.signOut(); } catch (e) {}
+      show("login");
+    };
     $("signout").onclick = signOut;
     $("btn-signout-2").onclick = signOut;
     $("btn-refresh").onclick = () => loadSessions();
-    sb.auth.getSession().then(({ data }) => { if (data.session) afterLogin(); else show("login"); });
+
+    // ── Entry point ───────────────────────────────────────────────────────────
+    // If the URL carries a room code, NO login is required — the room code is
+    // the access credential. Signaling (Supabase Realtime broadcast on
+    // room:<code>) works with the public anon key alone; media stays P2P.
+    // Login/picker is only used when no room code is present (to list your PCs).
+    const roomParam = (params.get("room") || "").toUpperCase();
+    if (roomParam) {
+      L("room code in URL → connecting without login.");
+      connect(roomParam);
+    } else {
+      sb.auth.getSession().then(({ data }) => { if (data.session) afterLogin(); else show("login"); });
+    }
 
     async function afterLogin() {
       const room = (params.get("room") || "").toUpperCase();
@@ -355,8 +373,8 @@
 
     async function onOffer(payload) {
       setStatus("connecting…");
-      L("onOffer() creating RTCPeerConnection — forcing TURN relay (iceTransportPolicy=relay)");
-      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, iceTransportPolicy: "relay" });
+      L("onOffer() creating RTCPeerConnection (STUN + TURN, policy=all)");
+      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       let iceSent = 0;
       pc.ontrack = (e) => {
         L("★ ontrack FIRED. kind =", e.track && e.track.kind, "streams =", e.streams.length, "trackState =", e.track && e.track.readyState);
