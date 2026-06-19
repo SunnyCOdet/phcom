@@ -355,8 +355,8 @@
 
     async function onOffer(payload) {
       setStatus("connecting…");
-      L("onOffer() creating RTCPeerConnection (STUN + TURN relay)");
-      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      L("onOffer() creating RTCPeerConnection — forcing TURN relay (iceTransportPolicy=relay)");
+      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, iceTransportPolicy: "relay" });
       let iceSent = 0;
       pc.ontrack = (e) => {
         L("★ ontrack FIRED. kind =", e.track && e.track.kind, "streams =", e.streams.length, "trackState =", e.track && e.track.readyState);
@@ -374,9 +374,18 @@
         dc.onclose = () => L("data channel CLOSED");
         dc.onmessage = onDcMessage;
       };
+      let relayCount = 0;
       pc.onicecandidate = (e) => {
-        if (e.candidate) { iceSent++; send("ice", { to: "host", from: peerId, peerId, role: "viewer", candidate: e.candidate }); }
-        else L("ICE gathering complete. candidates sent =", iceSent);
+        if (e.candidate) {
+          iceSent++;
+          const typ = (e.candidate.candidate.match(/ typ (\w+)/) || [])[1] || "?";
+          if (typ === "relay") relayCount++;
+          L("  local ICE candidate typ=" + typ);
+          send("ice", { to: "host", from: peerId, peerId, role: "viewer", candidate: e.candidate });
+        } else {
+          L("ICE gathering complete. candidates sent =", iceSent, "relay =", relayCount);
+          if (relayCount === 0) LE("  ✗ NO relay candidates — TURN server failed to allocate. With relay-only policy this connection cannot succeed.");
+        }
       };
       pc.oniceconnectionstatechange = () => L("iceConnectionState →", pc.iceConnectionState);
       pc.onicegatheringstatechange = () => L("iceGatheringState →", pc.iceGatheringState);
@@ -408,14 +417,21 @@
         let inV = null, pair = null; const byId = {};
         stats.forEach((r) => {
           byId[r.id] = r;
-          if (r.type === "inbound-rtp" && r.kind === "video") inV = r;
+          // iOS Safari keys this `mediaType`; Chrome uses `kind`.
+          if (r.type === "inbound-rtp" && (r.kind || r.mediaType) === "video") inV = r;
           if (r.type === "candidate-pair" && r.nominated && r.state === "succeeded") pair = r;
         });
+        // Direct probe of the video element — definitive regardless of stat keys.
+        const vw = video.videoWidth, vh = video.videoHeight;
+        const recv = pc.getReceivers().find((r) => r.track && r.track.kind === "video");
+        const trackMuted = recv && recv.track ? recv.track.muted : "?";
         if (inV) {
           const d = inV.bytesReceived - lastBytes; lastBytes = inV.bytesReceived;
-          L("stats: video bytes=" + inV.bytesReceived + " (+" + d + ") frames=" + (inV.framesDecoded || 0) + " w=" + (inV.frameWidth || 0) + " h=" + (inV.frameHeight || 0) + " video.readyState=" + video.readyState);
-          if (inV.bytesReceived === 0) LW("  no video bytes arriving yet — transport/path issue.");
-        } else { L("stats: no inbound video report yet"); }
+          L("stats: bytes=" + inV.bytesReceived + " (+" + d + ") frames=" + (inV.framesDecoded || 0) + " | video el " + vw + "x" + vh + " paused=" + video.paused + " | track.muted=" + trackMuted);
+          if (inV.bytesReceived === 0) LW("  no video bytes arriving — transport/path issue.");
+        } else {
+          L("stats: no inbound-rtp video yet | video el " + vw + "x" + vh + " paused=" + video.paused + " | track.muted=" + trackMuted);
+        }
         if (pair) {
           const loc = byId[pair.localCandidateId], rem = byId[pair.remoteCandidateId];
           L("ICE pair: local=" + (loc ? loc.candidateType : "?") + " remote=" + (rem ? rem.candidateType : "?") + (loc && loc.candidateType === "relay" ? " (TURN relay ✓)" : ""));

@@ -1425,7 +1425,10 @@
 
       closeRemotePeer(peerId);
       const stream = B.getStream();
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      // Force TURN relay: the direct path over the phone's hotspot passes the
+      // DTLS/SCTP handshake (data channel works) but drops sustained video RTP.
+      // Routing through TURN guarantees a working media path. Must match viewer.
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, iceTransportPolicy: 'relay' });
       remotePeers.set(peerId, pc);
 
       pc.onicecandidate = (e) => { if (e.candidate) chSend('ice', { to: peerId, role: 'host', candidate: e.candidate }); };
